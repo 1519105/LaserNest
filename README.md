@@ -123,7 +123,7 @@ offsetu 0/0 gravír a řez přesně sedí na sebe.
 | Gravír a řez na sebe nesedí | Jiná velikost nebo offset při načtení (musí být rozměr desky a 0/0), nebo se mezi kroky posunula nula/deska |
 | Výkon neodpovídá % | „Max. S“ v profilu ≠ `$30` v GRBL |
 | Na začátku řádků je gravír tmavší | Chybí `$32=1` (laser mode) |
-| Díly jsou zrcadlově / mimo desku | Nula G-code je jinde než při exportu (levý dolní × levý horní roh) |
+| Díly jsou mimo desku | Nula G-code je jinde než při exportu (levý dolní × levý horní roh) |
 | U objektu je text červeně (řeže se) | Prohozený soubor řezu a gravíru – od verze 0.1.2 to program pozná a opraví sám |
 
 ## Spuštění ze zdrojáků
