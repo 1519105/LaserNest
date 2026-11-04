@@ -1,9 +1,44 @@
-# LaserNest
+<h1 align="center">LaserNest</h1>
 
-Jednoduchý „slicer“ pro diodové lasery (Sculpfun, Atomstack, Ortur… s GRBL).
-Zadáš rozměr desky, přidáš objekty (gravír + řez) a počty kusů, program je
-**rozmístí podle skutečného tvaru** s otáčením a vyexportuje celou desku –
-vždy se zachovaným pořadím **nejdřív gravír, potom řez**.
+<p align="center"><b>Rozmístění dílů na desku pro diodové lasery – jako slicer pro 3D tisk.</b></p>
+
+<p align="center">
+Nesting podle skutečného tvaru s otáčením, gravír i řez vždy ve správném pořadí,
+export do G-code, SVG a PNG pro LaserGRBL a LightBurn – jeden program, bez instalace.
+</p>
+
+<p align="center">
+  <a href="https://github.com/1519105/LaserNest/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/1519105/LaserNest?label=release&color=2ea44f"></a>
+  <img alt="OS" src="https://img.shields.io/badge/OS-Windows%20%7C%20Linux-c0254c">
+  <img alt="laser" src="https://img.shields.io/badge/laser-GRBL%20%7C%20LaserGRBL%20%7C%20LightBurn-555">
+  <img alt="python" src="https://img.shields.io/badge/python-3.12-3776ab">
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-555"></a>
+</p>
+
+---
+
+## Obsah
+
+- [Co umí](#co-umí)
+- [Stažení](#stažení)
+- [Postup](#postup)
+- [Použití s LaserGRBL – krok za krokem](#použití-s-lasergrbl--krok-za-krokem)
+- [Spuštění ze zdrojáků](#spuštění-ze-zdrojáků)
+- [Jak funguje nesting](#jak-funguje-nesting)
+
+---
+
+## Co umí
+
+| Oblast | Funkce |
+|---|---|
+| **Deska** | Rozměr, okraj od kraje, mezera mezi díly, kontrola kolizí a přesahů |
+| **Objekty** | Řez (SVG) + gravír (PNG/JPG/SVG), nebo jen gravír; automatické párování souborů a rozpoznání řezu/gravíru podle obsahu; drag & drop |
+| **Rozmístění** | Podle skutečného obrysu, otáčení po 180° / 90° / 45° / 15°, víc pokusů, „Vyplnit zbytek desky“, ruční posun / otáčení / duplikace, „+1 na desku“ |
+| **Export** | G-code (gravír M4 → řez M3, volitelná pauza M0), PNG + SVG pro LaserGRBL, barevné SVG pro LightBurn / Inkscape |
+| **Optimalizace** | Řez nejdřív otvory, pak obrys; řazení dílů podle nejkratší cesty; gravír po souvislých ostrůvcích bez přejezdů přes desku; odhad času |
+| **Profily** | Rychlost, výkon, hustota řádků, průchody, max. S (`$30`), air assist – ukládají se a pamatují |
+| **Projekty** | Uložení a otevření celé desky (`.lnest`) |
 
 ![náhled](docs/screenshot.png)
 
