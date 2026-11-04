@@ -15,6 +15,11 @@ Hotové programy jsou v [Releases](../../releases) (sestaví se automaticky po k
 - **Linux:** `LaserNest-linux-x86_64` – `chmod +x` a spustit.
   Na Ubuntu/Debianu může být potřeba `sudo apt install libxcb-cursor0`.
 
+K pálení je potřeba program, který posílá G-code do laseru – doporučujeme
+**LaserGRBL** (zdarma, Windows): oficiální web **[lasergrbl.com](https://lasergrbl.com)**,
+zdrojáky a vydání na **[github.com/arkypita/LaserGRBL](https://github.com/arkypita/LaserGRBL/releases)**.
+Stahuj jen odtud – jiné „download“ weby často přibalují reklamy nebo malware.
+
 ## Postup
 
 1. **Deska** – rozměr (např. 300 × 350 mm), okraj od kraje a mezera mezi díly.
@@ -32,7 +37,7 @@ Hotové programy jsou v [Releases](../../releases) (sestaví se automaticky po k
 
 | Soubor | K čemu |
 |---|---|
-| `deska.svg` | Jedno SVG s barvami: **černá výplň = gravír**, **červená čára = řez** (LightBurn a spol. si udělají vrstvy podle barev) |
+| `deska.svg` | Jedno SVG s barvami: **černá výplň = gravír**, **červená čára = řez** – pro **LightBurn / Inkscape**. ⚠ **Ne pro LaserGRBL** (výplně neumí, gravír by jen obkreslil obrysy) |
 | `deska_1_gravir.png` + `deska_2_rez.svg` | Pro **LaserGRBL** – obojí má plátno přesně rozměr desky, načítej s offsetem 0/0 |
 | `deska.gcode` | Hotový G-code: gravír (M4) a pak řez (M3) v jednom souboru, nebo zvlášť |
 
@@ -57,6 +62,69 @@ max. S (GRBL `$30`) a air assist (M8/M9). Profily se ukládají do
 - **Gravír:** PNG/JPG/BMP (černobílý, práh 50 %) nebo SVG s vyplněnými tvary.
   Musí mít **stejné plátno jako řez** (stejný počátek vlevo nahoře) – rozměr
   rastru se přepočítá na šířku plátna řezu.
+
+## Použití s LaserGRBL – krok za krokem
+
+### Jednorázová příprava
+
+1. Připoj laser, v LaserGRBL zvol **COM port** a **115200** baud, připoj se (zelená ikona).
+2. **Grbl → Grbl Configuration**: zkontroluj **`$32 = 1`** (laser mode) a hodnotu
+   **`$30`** (max. S, obvykle 1000). Stejné `$30` nastav v profilu LaserNest
+   jako „Max. S“ – jinak nebude sedět výkon v %.
+3. V LaserNest si v **Profil laseru → Upravit** nastav rychlosti a výkony
+   pro svůj materiál (vyzkoušej na odřezku a ulož – profil se pamatuje).
+
+### Každá deska
+
+1. **LaserNest:** rozměr desky → přidat objekty → počty → **▶ Rozmístit** →
+   případně ručně doladit → **Export…**
+2. Polož desku do laseru, najeď hlavou na **levý dolní roh desky** (při
+   exportu s nulou „levý dolní roh“) a nastav tam **pracovní nulu**
+   (v konzoli LaserGRBL `G92 X0 Y0`, nebo tlačítkem nastavení nuly).
+3. Dál jedna ze dvou cest:
+
+#### A) Hotový G-code (doporučeno)
+
+1. **File → Open File →** `deska.gcode`.
+2. V náhledu zkontroluj, že díly leží uvnitř desky (osa Y roste od spodního
+   okraje – díly nahoře na desce mají velké Y, to je správně). Dlouhé tenké
+   čáry jsou jen přejezdy s vypnutým laserem.
+3. **▶ Run.** Laser sám nejdřív vygravíruje vše a pak vyřízne. Při volbě
+   „Pauza (M0)“ se mezi gravírem a řezem zastaví – pokračuj tlačítkem
+   **Resume / Cycle start** (třeba po kontrole gravíru nebo výměně čočky).
+
+Rychlost a výkon jsou už v G-code z profilu, v LaserGRBL se nic nenastavuje.
+Gravír a řez jde exportovat i do **dvou souborů** (Export → Obsah) a spustit je
+postupně.
+
+#### B) Obrázek gravíru + SVG řezu
+
+Hodí se, když chceš rychlosti/výkony ladit přímo v LaserGRBL.
+
+1. **File → Open File →** `deska_1_gravir.png`
+   - **Line To Line Tracing**, kvalita **10 lines/mm** (nebo co máš v profilu),
+     směr Horizontal.
+   - V dalším okně: rychlost gravíru, S-MAX (výkon), **velikost přesně
+     rozměr desky** (např. 300 × 350 mm) a **Offset X/Y = 0**.
+   - Vypal.
+2. **Neposouvej desku ani nulu.** **File → Open File →** `deska_2_rez.svg`
+   - Laser mode **M3 – Constant Power**, rychlost a S-MAX pro řez,
+     **Color filter: All**, velikost opět **rozměr desky**, **Offset 0/0**.
+   - Počet průchodů nastav vpravo dole (Passes) a vyřízni.
+
+Oba soubory mají plátno přesně jako deska, proto při stejné velikosti a
+offsetu 0/0 gravír a řez přesně sedí na sebe.
+
+### Časté problémy
+
+| Problém | Příčina / řešení |
+|---|---|
+| Barevné `deska.svg` v LaserGRBL dělá z teček kroužky / zasekne se na „Loading“ | LaserGRBL u SVG neumí výplně – použij **G-code** nebo **PNG + SVG řezu** |
+| Gravír a řez na sebe nesedí | Jiná velikost nebo offset při načtení (musí být rozměr desky a 0/0), nebo se mezi kroky posunula nula/deska |
+| Výkon neodpovídá % | „Max. S“ v profilu ≠ `$30` v GRBL |
+| Na začátku řádků je gravír tmavší | Chybí `$32=1` (laser mode) |
+| Díly jsou zrcadlově / mimo desku | Nula G-code je jinde než při exportu (levý dolní × levý horní roh) |
+| U objektu je text červeně (řeže se) | Prohozený soubor řezu a gravíru – od verze 0.1.2 to program pozná a opraví sám |
 
 ## Spuštění ze zdrojáků
 
