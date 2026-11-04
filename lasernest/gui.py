@@ -23,7 +23,7 @@ from . import __version__
 from . import export as E
 from . import profiles as P
 from .nest import NestSettings, Nester, Placement, check, utilization
-from .part import guess_pair, load_part, part_name
+from .part import file_role, guess_pair, load_part, part_name
 
 ROTS = [("Bez otáčení", 0), ("Po 180°", 180), ("Po 90°", 90), ("Po 45°", 45), ("Po 15°", 15)]
 PREC = [("Normální (0,5 mm)", 0.5), ("Rychlá (1 mm)", 1.0), ("Jemná (0,25 mm)", 0.25)]
@@ -218,6 +218,10 @@ class AddPartDialog(QDialog):
         lay.addRow("Název:", self.name)
         lay.addRow("Počet kusů:", self.count)
         lay.addRow("Šířka (jen gravír bez řezu):", self.width)
+        self.warn = QLabel(""); self.warn.setStyleSheet("color: #e05050"); self.warn.setVisible(False)
+        lay.addRow(self.warn)
+        self.cut.editingFinished.connect(self._check)
+        self.eng.editingFinished.connect(self._check)
         hint = QLabel("Gravír a řez musí mít stejné plátno (počátek vlevo nahoře).\n"
                       "Stačí jen jeden z nich: bez gravíru se díl jen vyřízne, bez řezu se jen vygravíruje\n"
                       "(u obrázku bez řezu zadej šířku v mm – JPG většinou skutečný rozměr nenese).")
@@ -227,26 +231,47 @@ class AddPartDialog(QDialog):
         bb.accepted.connect(self.accept); bb.rejected.connect(self.reject)
         lay.addRow(bb)
         self.resize(560, 10)
+        self._check()
 
     def _browse(self, le, flt):
-        start = os.path.dirname(le.text() or self.cut.text() or self.parent().last_dir)
+        start = os.path.dirname(le.text() or self.cut.text() or self.eng.text() or self.parent().last_dir)
         f, _ = QFileDialog.getOpenFileName(self, "Vybrat soubor", start, flt)
         if f:
-            le.setText(f)
             self.parent().last_dir = os.path.dirname(f)
-            if le is self.cut:
-                if not self.name.text():
-                    self.name.setText(part_name(f))
-                if not self.eng.text():
-                    g = guess_pair(f)
-                    if g:
-                        self.eng.setText(g)
-            elif not self.cut.text():
-                g = guess_pair(f)
-                if g:
-                    self.cut.setText(g)
-                    if not self.name.text():
-                        self.name.setText(part_name(g))
+            self.set_file(f)
+
+    def set_file(self, f):
+        """Zařadí soubor do správného pole podle obsahu (gravír/řez) a doplní k němu pár."""
+        role = file_role(f)
+        target, other = (self.cut, self.eng) if role == "cut" else (self.eng, self.cut)
+        target.setText(f)
+        if not self.name.text():
+            self.name.setText(part_name(f))
+        if not other.text():
+            g = guess_pair(f)
+            if g and file_role(g) != role:
+                other.setText(g)
+        self._check()
+
+    def _check(self):
+        c, e = self.cut.text().strip(), self.eng.text().strip()
+        msgs = []
+        if c and file_role(c) == "engrave":
+            msgs.append("⚠ Soubor v poli Řez obsahuje vyplněné tvary – vypadá jako gravír.")
+        if e and e.lower().endswith(".svg") and file_role(e) == "cut":
+            msgs.append("⚠ Soubor v poli Gravír obsahuje jen čáry – vypadá jako řez.")
+        if msgs and c and e and file_role(c) == "engrave" and file_role(e) == "cut":
+            msgs = ["⚠ Řez a gravír jsou nejspíš prohozené – při OK je prohodím."]
+        self.warn.setText("\n".join(msgs))
+        self.warn.setVisible(bool(msgs))
+
+    def accept(self):
+        c, e = self.cut.text().strip(), self.eng.text().strip()
+        if c and e and file_role(c) == "engrave" and file_role(e) == "cut":
+            self.cut.setText(e); self.eng.setText(c)
+        elif c and not e and file_role(c) == "engrave":
+            self.cut.setText(""); self.eng.setText(c)       # jen gravír
+        super().accept()
 
 
 class ProfileDialog(QDialog):
@@ -596,6 +621,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Chyba", "Vyber soubor řezu (SVG) nebo gravíru."); return None
         if cut and not os.path.exists(cut):
             QMessageBox.warning(self, "Chyba", f"Soubor řezu neexistuje:\n{cut}"); return None
+        if cut and eng and file_role(cut) == "engrave" and file_role(eng) == "cut":
+            cut, eng = eng, cut                     # prohozené soubory
+
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)
             p = load_part(cut or None, eng or None, name or None, width_mm)
@@ -877,17 +905,20 @@ class MainWindow(QMainWindow):
         for f in files:
             if f in used:
                 continue
-            pair = guess_pair(f)
-            if pair in files:
-                used.add(pair)
-            low = f.lower()
-            is_cut = low.endswith(".svg") and not any(k in low for k in ("gravir", "engrave"))
-            cut, eng = (f, pair or "") if is_cut else (pair or "", f)
             used.add(f)
-            if cut:
+            role = file_role(f)
+            # druhý soubor páru: přetažený spolu s ním, nebo nalezený podle názvu
+            pair = next((g for g in files if g not in used and part_name(g) == part_name(f)
+                         and file_role(g) != role), None) or guess_pair(f)
+            if pair and file_role(pair) == role:
+                pair = None
+            if pair:
+                used.add(pair)
+            cut, eng = (f, pair or "") if role == "cut" else (pair or "", f)
+            if cut and eng:
                 self.add_part(cut, eng)
             else:
-                self.add_part_dialog("", eng)
+                self.add_part_dialog(cut, eng)     # chybí druhý soubor nebo šířka – ať to uživatel doplní
 
     # ------------------------------------------------------------ zavření
     def _collect_settings(self):

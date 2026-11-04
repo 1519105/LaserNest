@@ -227,6 +227,37 @@ def guess_pair(path):
     return None
 
 
+_ROLE_CACHE = {}
+
+
+def file_role(path):
+    """Odhadne, zda je soubor řez ('cut') nebo gravír ('engrave') – podle obsahu, ne názvu.
+    Rastr = vždy gravír. SVG: převažují vyplněné tvary = gravír, jen čáry = řez."""
+    if not path or not os.path.exists(path):
+        return None
+    if not path.lower().endswith(".svg"):
+        return "engrave"
+    key = (path, os.path.getmtime(path))
+    if key in _ROLE_CACHE:
+        return _ROLE_CACHE[key]
+    role = None
+    try:
+        shapes, _, _ = _svg_shapes(path)
+        filled = sum(1 for _, fill, _, _ in shapes if fill)
+        stroked = sum(1 for _, fill, stroke, _ in shapes if stroke and not fill)
+        if filled and filled >= stroked:
+            role = "engrave"
+        elif stroked:
+            role = "cut"
+    except Exception:
+        role = None
+    if role is None:
+        low = os.path.basename(path).lower()
+        role = "engrave" if any(k in low for k in ("gravir", "engrave")) else "cut"
+    _ROLE_CACHE[key] = role
+    return role
+
+
 def part_name(path):
     stem = os.path.splitext(os.path.basename(path))[0]
     for suf in ("_2_rez", "_1_gravir", "_rez", "_gravir", "_cut", "_engrave", "-cut", "-engrave"):
