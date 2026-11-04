@@ -1,0 +1,82 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bin: dist/LaserNest.exe
+            asset: LaserNest-windows-x64.exe
+          - os: ubuntu-22.04
+            bin: dist/LaserNest
+            asset: LaserNest-linux-x86_64
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Instalace závislostí
+        run: pip install -r requirements.txt pyinstaller
+      - name: Testy
+        run: python tests/test_core.py
+      - name: Sestavení
+        run: python build.py
+      - name: Přejmenování
+        shell: bash
+        run: |
+          mv "${{ matrix.bin }}" "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  release:
+    # vydání se vytvoří (nebo aktualizuje) při každém push do main – tag v<verze> z lasernest/__init__.py
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verze
+        id: ver
+        run: echo "v=$(cut -d'"' -f2 lasernest/__init__.py | head -1)" >> "$GITHUB_OUTPUT"
+      - name: Úklid zastaralých vydání (tag mimo historii main)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --tags --force --unshallow 2>/dev/null || git fetch --tags --force
+          for t in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+            if ! git merge-base --is-ancestor "$t" "${{ github.sha }}" 2>/dev/null; then
+              echo "mažu $t"; gh release delete "$t" --cleanup-tag -y || true
+            fi
+          done
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.v }}
+          name: LaserNest ${{ steps.ver.outputs.v }}
+          target_commitish: ${{ github.sha }}
+          files: out/*
+          make_latest: true
+          body: |
+            **Windows:** stáhni `LaserNest-windows-x64.exe` a spusť.
+            **Linux:** stáhni `LaserNest-linux-x86_64`, `chmod +x` a spusť (případně `sudo apt install libxcb-cursor0`).

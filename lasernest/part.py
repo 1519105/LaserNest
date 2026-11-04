@@ -1,0 +1,293 @@
+"""Načítání objektu: řez (SVG) + gravír (PNG/JPG/BMP nebo SVG).
+
+Souřadnice dílu jsou v mm, počátek = levý horní roh plátna, osa Y dolů.
+Gravír a řez musí mít stejný počátek plátna (tak je generují běžné nástroje
+i naše skripty – oba soubory mají stejný rozměr plátna).
+"""
+from __future__ import annotations
+
+import math
+import os
+from dataclasses import dataclass, field
+
+import numpy as np
+from PIL import Image, ImageDraw
+from shapely.geometry import LineString, MultiPolygon, Polygon
+from shapely.ops import unary_union
+from shapely.validation import make_valid
+
+PX_PER_MM_96 = 96 / 25.4          # svgelements převádí jednotky na px při 96 DPI
+SAMPLE_MM = 0.15                  # krok vzorkování křivek
+PREVIEW_RES = 10                  # px/mm vnitřního rastru gravíru
+
+
+# --------------------------------------------------------------------- SVG
+def _svg_shapes(path):
+    from svgelements import SVG, Shape, Path, Move, Close, Line
+    svg = SVG.parse(path, reify=True, ppi=96)
+    out = []           # (polylines[list of (pts, closed)], fill, stroke, stroke_width_mm)
+    for el in svg.elements():
+        if not isinstance(el, Shape):
+            continue
+        try:
+            p = Path(el)
+        except Exception:
+            continue
+        if len(p) == 0:
+            continue
+        polylines = []
+        cur, closed = [], False
+        for seg in p:
+            if isinstance(seg, Move):
+                if len(cur) > 1:
+                    polylines.append((cur, closed))
+                cur, closed = [(seg.end.x, seg.end.y)], False
+            elif isinstance(seg, Close):
+                closed = True
+                if len(cur) > 1:
+                    polylines.append((cur, True))
+                cur, closed = [], False
+            elif isinstance(seg, Line):
+                if not cur:
+                    cur = [(seg.start.x, seg.start.y)]
+                cur.append((seg.end.x, seg.end.y))
+            else:
+                if not cur:
+                    cur = [(seg.start.x, seg.start.y)]
+                try:
+                    ln = seg.length(error=1e-3)
+                except Exception:
+                    ln = 10
+                n = max(4, int(math.ceil(ln / PX_PER_MM_96 / SAMPLE_MM)))
+                for i in range(1, n + 1):
+                    q = seg.point(i / n)
+                    cur.append((q.x, q.y))
+        if len(cur) > 1:
+            polylines.append((cur, closed))
+        # px -> mm
+        polylines = [([(x / PX_PER_MM_96, y / PX_PER_MM_96) for x, y in pts], c) for pts, c in polylines]
+        fill = el.fill is not None and el.fill.value is not None and getattr(el.fill, "alpha", 255) > 0
+        stroke = el.stroke is not None and el.stroke.value is not None and getattr(el.stroke, "alpha", 255) > 0
+        sw = (el.stroke_width or 1.0) / PX_PER_MM_96 if stroke else 0.0
+        out.append((polylines, fill, stroke, sw))
+    try:
+        w = svg.width / PX_PER_MM_96
+        h = svg.height / PX_PER_MM_96
+    except Exception:
+        w = h = None
+    return out, w, h
+
+
+def _close(pts):
+    if pts[0] != pts[-1]:
+        pts = pts + [pts[0]]
+    return pts
+
+
+def _evenodd(polylines):
+    g = None
+    for pts, _ in polylines:
+        if len(pts) < 3:
+            continue
+        p = make_valid(Polygon(_close(pts)))
+        g = p if g is None else g.symmetric_difference(p)
+    return g
+
+
+@dataclass
+class CutPath:
+    pts: list            # [(x, y)] mm
+    closed: bool
+
+    @property
+    def area(self):
+        return abs(Polygon(self.pts).area) if self.closed and len(self.pts) > 2 else 0.0
+
+
+@dataclass
+class Part:
+    name: str
+    cut: list                         # [CutPath]
+    outline: Polygon                  # vnější obrys (pro nesting)
+    engrave_img: Image.Image | None   # L, 0 = pálit, 255 = nic; rozlišení img_res px/mm, počátek 0,0
+    img_res: float = PREVIEW_RES
+    engrave_vec: object = None        # shapely geometrie (pokud byl gravír ve vektoru)
+    cut_file: str = ""
+    engrave_file: str = ""
+    count: int = 1
+    fill: bool = False
+    meta: dict = field(default_factory=dict)
+
+    @property
+    def area(self):
+        return self.outline.area
+
+
+def load_cut(path):
+    shapes, w, h = _svg_shapes(path)
+    paths = []
+    for polylines, fill, stroke, sw in shapes:
+        for pts, closed in polylines:
+            if len(pts) < 2:
+                continue
+            if not closed and len(pts) > 2 and math.dist(pts[0], pts[-1]) < 0.05:
+                closed = True
+            if closed and pts[0] != pts[-1]:
+                pts = pts + [pts[0]]
+            paths.append(CutPath(pts, closed))
+    if not paths:
+        raise ValueError(f"V souboru řezu nejsou žádné čáry: {os.path.basename(path)}")
+    geoms = []
+    for cp in paths:
+        if cp.closed and len(cp.pts) > 3:
+            geoms.append(make_valid(Polygon(cp.pts)))
+        else:
+            geoms.append(LineString(cp.pts).buffer(0.2))
+    u = unary_union(geoms)
+    polys = list(u.geoms) if hasattr(u, "geoms") else [u]
+    polys = [p for p in polys if isinstance(p, Polygon) and p.area > 0]
+    big = max(polys, key=lambda p: p.area)
+    # obrys = sjednocení vnějších obálek všech uzavřených tvarů (díry ignorujeme)
+    outline = unary_union([Polygon(p.exterior) for p in polys])
+    if isinstance(outline, MultiPolygon):
+        outline = outline.convex_hull if len(outline.geoms) > 1 else outline.geoms[0]
+    return paths, Polygon(outline.exterior), (w, h)
+
+
+def load_engrave_svg(path):
+    shapes, w, h = _svg_shapes(path)
+    geoms = []
+    for polylines, fill, stroke, sw in shapes:
+        if fill:
+            g = _evenodd([pl for pl in polylines if pl[1] or len(pl[0]) > 2])
+            if g is not None and not g.is_empty:
+                geoms.append(g)
+        if stroke and sw > 0:
+            for pts, c in polylines:
+                ls = LineString(_close(pts) if c else pts)
+                geoms.append(ls.buffer(max(sw, 0.1) / 2))
+    if not geoms:
+        return None, (w, h)
+    return unary_union(geoms), (w, h)
+
+
+def rasterize(geom, w_mm, h_mm, res=PREVIEW_RES, ox=0.0, oy=0.0):
+    """Vyplněná geometrie -> obrázek L (0 = pálit)."""
+    W, H = max(1, round(w_mm * res)), max(1, round(h_mm * res))
+    img = Image.new("L", (W, H), 255)
+    if geom is None or geom.is_empty:
+        return img
+    for p in (geom.geoms if hasattr(geom, "geoms") else [geom]):
+        if not isinstance(p, Polygon):
+            continue
+        m = Image.new("L", (W, H), 0)
+        d = ImageDraw.Draw(m)
+        d.polygon([((x - ox) * res, (y - oy) * res) for x, y in p.exterior.coords], fill=255)
+        for i in p.interiors:
+            d.polygon([((x - ox) * res, (y - oy) * res) for x, y in i.coords], fill=0)
+        img.paste(0, (0, 0), m)
+    return img
+
+
+def load_engrave_raster(path, fallback_size_mm=None):
+    im = Image.open(path)
+    dpi = im.info.get("dpi")
+    if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+        im = im.convert("RGBA")
+        bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+        bg.alpha_composite(im)
+        im = bg
+    im = im.convert("L")
+    if fallback_size_mm and fallback_size_mm[0]:
+        # rozměr plátna řezu má přednost – soubory se tak vždy přesně kryjí
+        res = im.width / fallback_size_mm[0]
+    elif dpi and dpi[0] > 1:
+        res = float(dpi[0]) / 25.4
+    else:
+        res = 96 / 25.4
+    im = im.point(lambda v: 0 if v < 128 else 255)
+    return im, res
+
+
+def guess_pair(path):
+    """K souboru řezu/gravíru zkusí najít druhý soubor podle názvu."""
+    d, b = os.path.split(path)
+    stem, ext = os.path.splitext(b)
+    cands = []
+    for a, bb in (("_2_rez", "_1_gravir"), ("_rez", "_gravir"), ("_cut", "_engrave"), ("-cut", "-engrave")):
+        if stem.endswith(a):
+            base = stem[: -len(a)]
+            cands += [os.path.join(d, base + bb + e) for e in (".png", ".svg", ".jpg", ".bmp")]
+        if stem.endswith(bb):
+            base = stem[: -len(bb)]
+            cands += [os.path.join(d, base + a + ".svg")]
+    for c in cands:
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def part_name(path):
+    stem = os.path.splitext(os.path.basename(path))[0]
+    for suf in ("_2_rez", "_1_gravir", "_rez", "_gravir", "_cut", "_engrave", "-cut", "-engrave"):
+        if stem.endswith(suf):
+            return stem[: -len(suf)]
+    return stem
+
+
+def load_part(cut_file, engrave_file=None, name=None, width_mm=0.0):
+    """width_mm > 0: přeškáluje gravír bez řezu na danou šířku (u obrázku bez rozměru)."""
+    if not cut_file:
+        if not engrave_file:
+            raise ValueError("Zadej soubor řezu nebo gravíru.")
+        return _load_engrave_only(engrave_file, name, width_mm)
+    cut, outline, (cw, ch) = load_cut(cut_file)
+    minx, miny, maxx, maxy = outline.bounds
+    canvas_w = cw if cw else maxx
+    canvas_h = ch if ch else maxy
+    vec, img, res = None, None, PREVIEW_RES
+    if engrave_file:
+        if engrave_file.lower().endswith(".svg"):
+            vec, _ = load_engrave_svg(engrave_file)
+            if vec is not None:
+                img = rasterize(vec, canvas_w, canvas_h, PREVIEW_RES)
+        else:
+            img, res = load_engrave_raster(engrave_file, (canvas_w, canvas_h))
+    return Part(name=name or part_name(cut_file), cut=cut, outline=outline,
+                engrave_img=img, img_res=res, engrave_vec=vec,
+                cut_file=cut_file, engrave_file=engrave_file or "",
+                meta={"canvas": (canvas_w, canvas_h)})
+
+
+def _load_engrave_only(engrave_file, name, width_mm):
+    """Jen gravír (bez řezu): obrys pro rozmístění = obdélník kolem vypalovaných míst."""
+    from shapely.geometry import box
+    vec = None
+    if engrave_file.lower().endswith(".svg"):
+        vec, (w, h) = load_engrave_svg(engrave_file)
+        if vec is None:
+            raise ValueError("V SVG gravíru nejsou žádné vyplněné tvary.")
+        bx = vec.bounds
+        if width_mm and width_mm > 0:
+            from shapely import affinity
+            k = width_mm / (bx[2] - bx[0])
+            vec = affinity.scale(vec, k, k, origin=(bx[0], bx[1]))
+        bx = vec.bounds
+        from shapely import affinity
+        vec = affinity.translate(vec, -bx[0], -bx[1])
+        cw, ch = bx[2] - bx[0], bx[3] - bx[1]
+        img, res = rasterize(vec, cw, ch, PREVIEW_RES), PREVIEW_RES
+    else:
+        img, res = load_engrave_raster(engrave_file)
+        a = np.asarray(img) < 128
+        if not a.any():
+            raise ValueError("Obrázek gravíru je celý bílý – není co pálit.")
+        ys, xs = np.nonzero(a)
+        img = img.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
+        if width_mm and width_mm > 0:
+            res = img.width / width_mm
+        cw, ch = img.width / res, img.height / res
+    return Part(name=name or part_name(engrave_file), cut=[], outline=box(0, 0, cw, ch),
+                engrave_img=img, img_res=res, engrave_vec=vec,
+                cut_file="", engrave_file=engrave_file,
+                meta={"canvas": (cw, ch), "width_mm": width_mm or 0.0})
