@@ -89,12 +89,15 @@ def rotations(step):
 
 class _Shape:
     """Předpočítaná maska jedné rotace jednoho dílu."""
-    __slots__ = ("angle", "minx", "miny", "h", "w", "fft", "mask", "poly")
+    __slots__ = ("angle", "minx", "miny", "h", "w", "fft", "mask", "poly", "ring_fft", "ring_k")
 
 
 class Nester:
     XW = 0.02          # váha vodorovné pozice ve skóre (vůči svislé)
     COARSE = True      # předvýběr pořadí v hrubém rozlišení
+    ADJ = 0.0          # váha dotyku s ostatními díly (maximální přilnutí) ve skóre pozice
+    MUTATE = True      # vylepšování nejlepšího pořadí prohazováním dílů
+    COMPACT = True     # dotlačení dílů k výchozímu rohu po rozmístění
 
     def __init__(self, parts, st: NestSettings, progress=None, cancel=None):
         self.parts = parts
@@ -130,6 +133,13 @@ class Nester:
         s.angle, s.minx, s.miny, s.h, s.w = angle, minx - r, miny - r, h, w
         s.fft = np.conj(np.fft.rfft2(pad)).astype(np.complex64)
         s.mask = m
+        # prstenec kolem dílu (pro výpočet, jak moc se díl dotýká sousedů)
+        k = max(1, int(round(1.0 / r)))
+        ring = (np.asarray(im.filter(ImageFilter.MaxFilter(2 * k + 1))) > 0).astype(np.float32) - m
+        pad2 = np.zeros((self.H, self.W), np.float32)
+        pad2[:h, :w] = ring
+        s.ring_fft = np.conj(np.fft.rfft2(pad2)).astype(np.complex64) if self.ADJ > 0 else None
+        s.ring_k = k
         s.poly = poly
         return s
 
@@ -183,6 +193,9 @@ class Nester:
                 score = h_far + v_near * self.XW
             else:
                 score = v_far + h_near * self.XW
+            if s.ring_fft is not None:
+                contact = np.fft.irfft2(occ_fft * s.ring_fft, s=(self.H, self.W))[:vh, :vw]
+                score = score - self.ADJ * contact / s.ring_k
             sc = np.where(free, score, np.inf)
             k = int(np.argmin(sc))
             ii, jj = divmod(k, vw)
@@ -268,38 +281,122 @@ class Nester:
             orders.append(o)
         # Jemné rozlišení je drahé: všechna pořadí se nejdřív zkusí nahrubo (1 mm)
         # a jemně se přepočítají jen nejlepší dvě.
-        cand = list(range(len(orders)))
-        total = len(orders)
-        step = 0
-        if self.COARSE and self.st.res < 0.9 and len(orders) > 2:
+        use_coarse = self.COARSE and self.st.res < 0.9 and len(orders) > 2
+        if use_coarse:
             from dataclasses import replace
-            coarse = Nester(self.parts, replace(self.st, res=1.0), cancel=self.cancel)
-            cbase = coarse.occ_from(locked) if locked else None
-            total = len(orders) + 2
-            scored = []
-            for t, o in enumerate(orders):
-                if self.cancel():
-                    break
-                self.progress(step, total); step += 1
-                placed, missing, _ = coarse.run_order(o, fill_ids, cbase)
-                ys = [coarse._extent(p) for p in placed] or [0]
-                scored.append(((len(placed), -len(missing), -max(ys)), t))
-            scored.sort(reverse=True)
-            cand = [t for _, t in scored[:2]] or [0]
-        best = None
-        for t in cand:
+            ev = Nester(self.parts, replace(self.st, res=1.0), cancel=self.cancel)
+            ebase = ev.occ_from(locked) if locked else None
+        else:
+            ev, ebase = self, base_occ
+        n_mut = self.st.trials if (self.MUTATE and len(req) > 2) else 0
+        total = len(orders) + n_mut + (2 if use_coarse else 0) + (1 if self.COMPACT else 0)
+        step = 0
+        scored = []                                    # (klíč, pořadí, výsledek)
+
+        def evaluate(o):
+            placed, missing, _ = ev.run_order(o, fill_ids, ebase)
+            return ev._key(placed, missing), (placed, missing)
+
+        for o in orders:
             if self.cancel():
                 break
             self.progress(step, total); step += 1
-            placed, missing, occ = self.run_order(orders[t], fill_ids, base_occ)
-            ys = [self._extent(p) for p in placed] or [0]
-            key = (len(placed), -len(missing), -max(ys))
-            if best is None or key > best[0]:
-                best = (key, placed, missing)
-        self.progress(total, total)
-        if best is None:
+            k, r = evaluate(o)
+            scored.append((k, o, r))
+        # vylepšování: náhodné prohození / přesunutí dílu v nejlepším pořadí
+        if scored and n_mut:
+            bk, bo, br = max(scored, key=lambda t: t[0])
+            for _ in range(n_mut):
+                if self.cancel():
+                    break
+                self.progress(step, total); step += 1
+                o = list(bo)
+                i, j = rnd.sample(range(len(o)), 2)
+                if rnd.random() < 0.5:
+                    o[i], o[j] = o[j], o[i]
+                else:
+                    o.insert(j, o.pop(i))
+                if o == bo:
+                    continue
+                k, r = evaluate(o)
+                scored.append((k, o, r))
+                if k > bk:
+                    bk, bo, br = k, o, r
+        if not scored:
             return [], []
-        _, placed, missing = best
+        scored.sort(key=lambda t: t[0], reverse=True)
+        if use_coarse:
+            best = None
+            for k_, o, _ in scored[:2]:
+                if self.cancel():
+                    break
+                self.progress(step, total); step += 1
+                placed, missing, _ = self.run_order(o, fill_ids, base_occ)
+                key = self._key(placed, missing)
+                if best is None or key > best[0]:
+                    best = (key, placed, missing)
+            if best is None:
+                return [], []
+            _, placed, missing = best
+        else:
+            placed, missing = scored[0][2]
+        if self.COMPACT and not self.cancel():
+            self.progress(step, total); step += 1
+            placed, missing = self._compact(list(placed), locked, fill_ids, list(missing))
+        self.progress(total, total)
+        return placed, missing
+
+    def _key(self, placed, missing):
+        """Hodnocení výsledku: 1) vejdou se všechny zadané kusy, 2) víc kusů celkem,
+        3) díly co nejblíž výchozímu rohu."""
+        ys = [self._extent(p) for p in placed] or [0]
+        return (-len(missing), len(placed), -round(max(ys), 1), -round(sum(ys), 0))
+
+    def _near(self, pl):
+        x0, y0, x1, y1 = place_geom(self.parts, pl).bounds
+        if self.st.direction == "cols":
+            return y0 if self.st.corner[0] == "t" else self.st.board_h - y1
+        return x0 if self.st.corner[1] == "l" else self.st.board_w - x1
+
+    def _compact(self, placed, locked, fill_ids, missing):
+        """Dotlačení: každý díl (od rohu dál) se zkusí znovu umístit blíž výchozímu rohu.
+        Uvolněné místo pak dostanou chybějící a vyplňovací díly."""
+        tol = max(0.5, self.st.res)
+        for _ in range(2):
+            moved = False
+            for k in sorted(range(len(placed)), key=lambda q: self._extent(placed[q])):
+                if self.cancel():
+                    return placed, missing
+                others = locked + placed[:k] + placed[k + 1:]
+                b = self._best(np.fft.rfft2(self.occ_from(others)), placed[k].part)
+                if b is None:
+                    continue
+                c = self._place(b[1], placed[k].part, b[2], b[3])
+                e0, e1 = self._extent(placed[k]), self._extent(c)
+                if e1 < e0 - tol or (abs(e1 - e0) <= tol and self._near(c) < self._near(placed[k]) - tol):
+                    placed[k] = c
+                    moved = True
+            if not moved:
+                break
+        occ = self.occ_from(locked + placed)
+        occ_fft = np.fft.rfft2(occ)
+        for idx in list(missing):
+            b = self._best(occ_fft, idx)
+            if b is not None:
+                _, s, i, j = b
+                self._stamp(occ, s, i, j); occ_fft = np.fft.rfft2(occ)
+                placed.append(self._place(s, idx, i, j)); missing.remove(idx)
+        alive = list(fill_ids) if not missing else []
+        k = 0
+        while alive and not self.cancel():
+            idx = alive[k % len(alive)]
+            b = self._best(occ_fft, idx)
+            if b is None:
+                alive.remove(idx); continue
+            _, s, i, j = b
+            self._stamp(occ, s, i, j); occ_fft = np.fft.rfft2(occ)
+            placed.append(self._place(s, idx, i, j))
+            k += 1
         return placed, missing
 
     def _extent(self, pl):

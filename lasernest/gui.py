@@ -1149,6 +1149,7 @@ class MainWindow(QMainWindow):
             self.prec.addItem(T(t), v)
         self.prec.setCurrentIndex(self.settings.get("prec", 0))
         f.addRow(T("Přesnost:"), self.prec)
+        self.prec.currentIndexChanged.connect(lambda *_: self._check_timer.start(50))
         self.trials = QSpinBox(); self.trials.setRange(1, 100); self.trials.setValue(self.settings.get("trials", 8))
         f.addRow(T("Počet pokusů:"), self.trials)
         self.corner = QComboBox()
@@ -1479,6 +1480,9 @@ class MainWindow(QMainWindow):
                 w = f"{p.name}: {w[2:]}"
                 if w not in warns:
                     warns.append(w)
+        if self.prec.currentData() >= 1.0 and self.gap.value() < 2.0:
+            warns.append(T("Rychlá přesnost (1 mm) přidává kolem dílů rezervu ~1 mm – při malé mezeře "
+                           "se vejde méně kusů. Použij Normální nebo Jemnou."))
         for w in warns:
             txt.append(f"<span style='color:#c60'>⚠ {w}</span>")
         if self.edit_mode:

@@ -411,4 +411,6 @@ EN = {
     "Co se vypálí": "What gets burned",
     "Nastavení obrázku gravíru…": "Engraving image settings…",
     "Dvojklik = nastavení obrázku (dithering, stupně šedi…)": "Double-click = image settings (dithering, grayscale…)",
+    "Rychlá přesnost (1 mm) přidává kolem dílů rezervu ~1 mm – při malé mezeře se vejde méně kusů. Použij Normální nebo Jemnou.":
+        "Fast precision (1 mm) adds a ~1 mm safety margin around parts – with a small gap fewer pieces fit. Use Normal or Fine.",
 }
