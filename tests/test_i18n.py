@@ -18,7 +18,7 @@ CZ = re.compile(r"[ěščřžůňťďĚŠČŘŽŮŇŤĎ]|\b(?:deska|díl|řez|gr
 def static_check():
     """Všechny literály předané do T() musí mít anglický překlad."""
     missing = []
-    for fn in ("gui.py", "export.py", "part.py", "profiles.py"):
+    for fn in ("gui.py", "export.py", "part.py", "profiles.py", "testgrid.py"):
         tree = ast.parse(open(os.path.join(ROOT, "lasernest", fn), encoding="utf-8").read())
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "T" and node.args:
@@ -97,7 +97,8 @@ def gui_check():
     dialogs = [gui.AddPartDialog(w, os.path.join(ex, "reindeer_1_engrave.png"), os.path.join(ex, "reindeer_2_cut.svg")),
                gui.TransformDialog(w, w.parts[0], 3.0, angle=0, multi=True),
                gui.ProfileDialog(w, w.profiles[0]),
-               gui.ExportDialog(w, tempfile.gettempdir(), "board", w.profiles, 0, {})]
+               gui.ExportDialog(w, tempfile.gettempdir(), "board", w.profiles, 0, {}),
+               gui.TestGridDialog(w, w.profiles, 0, {})]
     for d in dialogs:
         texts += texts_of(d)
     bad = sorted({t for t in texts if t and t != "Čeština" and CZ.search(t)})   # název jazyka v menu je česky záměrně

@@ -48,6 +48,7 @@ export to G-code, SVG and PNG for LaserGRBL and LightBurn – one program, no in
 | **Cutting** | Tabs (count and width) so parts don't fall out, kerf compensation from the profile; holes first, then the outline |
 | **Optimization** | Parts ordered by shortest path from the laser zero; engraving in connected islands without travel across the board; time estimate |
 | **Profiles** | Speed, power, line density, passes, kerf, max. S (`$30`), air assist – saved and remembered |
+| **Material test grid** | Squares with different power × speed (engraving or cutting), value labels, optional border cut; click the best square and save it as a profile |
 | **Projects** | Save and open the whole board (`.lnest`) |
 | **Language** | English (default) and Czech – switch in **Help → Language / Jazyk** |
 
@@ -60,6 +61,10 @@ Ready-to-run programs are in [Releases](../../releases) (built automatically on 
 - **Windows:** `LaserNest-windows-x64.exe` – just run it (no installation).
 - **Linux:** `LaserNest-linux-x86_64` – `chmod +x` and run.
   On Ubuntu/Debian you may need `sudo apt install libxcb-cursor0`.
+
+> **Windows SmartScreen:** the program isn't digitally signed (a certificate costs money), so on the
+> first launch Windows may show *“Windows protected your PC”*. Click **More info → Run anyway**.
+> Download only from [Releases](../../releases) of this repository.
 
 To burn you need a program that sends G-code to the laser – we recommend
 **LaserGRBL** (free, Windows): official website **[lasergrbl.com](https://lasergrbl.com)**,
@@ -97,6 +102,17 @@ Download it only from there – other “download” sites often bundle ads or m
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Duplicate / delete | `Ctrl+D` / `Del` |
 | Zoom / whole board | mouse wheel / `F` |
+
+### Material test grid
+
+**Tools → Material test grid…** (`Ctrl+G`) – finds the right settings for a new material:
+
+1. Choose the base profile, the test (*engraving* = filled squares, *cutting* = square outlines),
+   the power range (columns) and speed range (rows), square size and gap.
+2. **Save G-code…**, set the zero to where the bottom left corner of the grid should be and burn it on
+   an offcut of the material. Value labels are engraved next to the squares.
+3. Click the square that came out best in the preview → **Save the selected square as a profile…**
+   – a new profile with that power and speed is created and selected.
 
 ### What gets exported
 
@@ -212,7 +228,7 @@ python main.py
 ```
 
 Building your own exe/binary: `pip install pyinstaller && python build.py`.
-Tests: `python tests/test_core.py`, `python tests/test_v02.py`, `python tests/test_i18n.py`.
+Tests: `python tests/test_core.py`, `python tests/test_v02.py`, `python tests/test_i18n.py`, `python tests/test_v04.py`.
 Checking G-code: `python tools/gcode_preview.py board.gcode preview.png`.
 
 ## How the nesting works
@@ -220,4 +236,5 @@ Checking G-code: `python tools/gcode_preview.py board.gcode preview.png`.
 The board is turned into an occupancy raster (0.5 mm). For every part and rotation a mask
 of the outline grown by half the gap is prepared, and all free spots are found at once
 using an FFT. Each part goes to the spot closest to the chosen start corner, several
-orders are tried and the best one wins. The result is verified with exact geometry.
+orders are tried and the best one wins. With fine precision all orders are first tried
+at a coarse 1 mm resolution and only the two best are recomputed finely (several times faster). The result is verified with exact geometry.

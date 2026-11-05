@@ -48,6 +48,7 @@ export do G-code, SVG a PNG pro LaserGRBL a LightBurn – jeden program, bez ins
 | **Řez** | Můstky (počet a šířka) proti vypadnutí dílů, kompenzace šířky řezu (kerf) z profilu; nejdřív otvory, pak obrys |
 | **Optimalizace** | Řazení dílů podle nejkratší cesty; gravír po souvislých ostrůvcích bez přejezdů přes desku; odhad času |
 | **Profily** | Rychlost, výkon, hustota řádků, průchody, kerf, max. S (`$30`), air assist – ukládají se a pamatují |
+| **Testovací mřížka** | Čtverečky s různým výkonem × rychlostí (gravír nebo řez), popisky hodnot, volitelně vyříznutý okraj; klikneš na nejlepší čtvereček a uložíš ho jako profil |
 | **Projekty** | Uložení a otevření celé desky (`.lnest`) |
 | **Jazyk** | Angličtina (výchozí) a čeština – přepínání v menu **Nápověda → Jazyk / Language** |
 
@@ -60,6 +61,10 @@ Hotové programy jsou v [Releases](../../releases) (sestaví se automaticky po k
 - **Windows:** `LaserNest-windows-x64.exe` – stačí spustit (bez instalace).
 - **Linux:** `LaserNest-linux-x86_64` – `chmod +x` a spustit.
   Na Ubuntu/Debianu může být potřeba `sudo apt install libxcb-cursor0`.
+
+> **Windows SmartScreen:** program není digitálně podepsaný (certifikát se platí), takže Windows při
+> prvním spuštění může ukázat *„Systém Windows ochránil váš počítač“*. Klikni na **Další informace →
+> Přesto spustit**. Stahuj jen z [Releases](../../releases) tohoto repozitáře.
 
 K pálení je potřeba program, který posílá G-code do laseru – doporučujeme
 **LaserGRBL** (zdarma, Windows): oficiální web **[lasergrbl.com](https://lasergrbl.com)**,
@@ -97,6 +102,17 @@ Stahuj jen odtud – jiné „download“ weby často přibalují reklamy nebo m
 | Zpět / znovu | `Ctrl+Z` / `Ctrl+Y` |
 | Duplikovat / smazat | `Ctrl+D` / `Del` |
 | Zoom / celá deska | kolečko myši / `F` |
+
+### Testovací mřížka materiálu
+
+**Nástroje → Testovací mřížka materiálu…** (`Ctrl+G`) – najde správné nastavení pro nový materiál:
+
+1. Vyber výchozí profil, test (*gravír* = plné čtverečky, *řez* = obrysy čtverečků),
+   rozsah výkonu (sloupce) a rychlosti (řádky), velikost čtverečku a mezeru.
+2. **Uložit G-code…**, nulu nastav tam, kde má být levý dolní roh mřížky, a vypal ji na odřezek
+   materiálu. Vedle čtverečků se vygravírují popisky hodnot.
+3. V náhledu klikni na čtvereček, který dopadl nejlépe → **Uložit vybraný čtvereček jako profil…**
+   – vznikne nový profil s tímto výkonem a rychlostí a rovnou se vybere.
 
 ### Co se exportuje
 
@@ -215,11 +231,12 @@ python main.py
 ```
 
 Sestavení vlastního exe/binárky: `pip install pyinstaller && python build.py`.
-Testy: `python tests/test_core.py`, `python tests/test_v02.py`, `python tests/test_i18n.py`. Kontrola G-code: `python tools/gcode_preview.py deska.gcode nahled.png`.
+Testy: `python tests/test_core.py`, `python tests/test_v02.py`, `python tests/test_i18n.py`, `python tests/test_v04.py`. Kontrola G-code: `python tools/gcode_preview.py deska.gcode nahled.png`.
 
 ## Jak funguje nesting
 
 Deska se převede na rastr obsazenosti (0,5 mm). Pro každý díl a natočení se
 připraví maska obrysu zvětšená o polovinu mezery a všechna volná místa se
 najdou najednou přes FFT. Díl jde na místo co nejblíž zvolenému výchozímu rohu,
-zkusí se několik pořadí a vezme se nejlepší. Výsledek se ověří přesnou geometrií.
+zkusí se několik pořadí a vezme se nejlepší. Při jemné přesnosti se všechna pořadí
+nejdřív zkusí nahrubo (1 mm) a jemně se přepočítají jen dvě nejlepší (několikrát rychlejší). Výsledek se ověří přesnou geometrií.

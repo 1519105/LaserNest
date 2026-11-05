@@ -94,6 +94,7 @@ class _Shape:
 
 class Nester:
     XW = 0.02          # váha vodorovné pozice ve skóre (vůči svislé)
+    COARSE = True      # předvýběr pořadí v hrubém rozlišení
 
     def __init__(self, parts, st: NestSettings, progress=None, cancel=None):
         self.parts = parts
@@ -265,17 +266,37 @@ class Nester:
             # zamíchej jen sousední velikosti – velké díly pořád spíš dřív
             o = sorted(o, key=lambda i: -self._area(i) * rnd.uniform(0.6, 1.4))
             orders.append(o)
+        # Jemné rozlišení je drahé: všechna pořadí se nejdřív zkusí nahrubo (1 mm)
+        # a jemně se přepočítají jen nejlepší dvě.
+        cand = list(range(len(orders)))
+        total = len(orders)
+        step = 0
+        if self.COARSE and self.st.res < 0.9 and len(orders) > 2:
+            from dataclasses import replace
+            coarse = Nester(self.parts, replace(self.st, res=1.0), cancel=self.cancel)
+            cbase = coarse.occ_from(locked) if locked else None
+            total = len(orders) + 2
+            scored = []
+            for t, o in enumerate(orders):
+                if self.cancel():
+                    break
+                self.progress(step, total); step += 1
+                placed, missing, _ = coarse.run_order(o, fill_ids, cbase)
+                ys = [coarse._extent(p) for p in placed] or [0]
+                scored.append(((len(placed), -len(missing), -max(ys)), t))
+            scored.sort(reverse=True)
+            cand = [t for _, t in scored[:2]] or [0]
         best = None
-        for t, o in enumerate(orders):
+        for t in cand:
             if self.cancel():
                 break
-            self.progress(t, len(orders))
-            placed, missing, occ = self.run_order(o, fill_ids, base_occ)
+            self.progress(step, total); step += 1
+            placed, missing, occ = self.run_order(orders[t], fill_ids, base_occ)
             ys = [self._extent(p) for p in placed] or [0]
             key = (len(placed), -len(missing), -max(ys))
             if best is None or key > best[0]:
                 best = (key, placed, missing)
-        self.progress(len(orders), len(orders))
+        self.progress(total, total)
         if best is None:
             return [], []
         _, placed, missing = best

@@ -169,20 +169,57 @@ def _slice(pts, cum, d0, d1):
     return out
 
 
+def _tab_centers(pts, cum, n, w, max_turn=12.0):
+    """Polohy středů můstků (vzdálenost podél cesty): co nejrovnoměrněji, ale jen na
+    rovných úsecích – v okolí ±(w/2 + 1 mm) se směr obrysu nesmí změnit o víc než max_turn°."""
+    L = cum[-1]
+    step = L / n
+    ds = 0.25
+    N = max(8, int(L / ds))
+    s = np.arange(N) * (L / N)
+    seg = np.clip(np.searchsorted(cum, s, side="right") - 1, 0, len(pts) - 2)
+    P = np.asarray(pts, dtype=float)
+    d = P[seg + 1] - P[seg]
+    h = np.arctan2(d[:, 1], d[:, 0])
+    m = max(1, int(math.ceil((w / 2 + 1.0) / (L / N))))
+    dev = np.zeros(N)
+    for k in range(-m, m + 1):
+        if k:
+            dev = np.maximum(dev, np.abs(np.angle(np.exp(1j * (np.roll(h, -k) - h)))))
+    ok = dev < math.radians(max_turn)
+    centers = []
+    for i in range(n):
+        ideal = step * (i + 0.5)
+        dist = np.abs((s - ideal + L / 2) % L - L / 2)          # kruhová vzdálenost
+        win = dist <= step * 0.4
+        good = win & ok
+        if good.any():
+            k = int(np.argmin(np.where(good, dist, np.inf)))
+        else:                                                     # žádný rovný kus – nejrovnější místo
+            k = int(np.argmin(np.where(win, dev, np.inf)))
+        centers.append(float(s[k]))
+    return sorted(centers)
+
+
 def _tabs(pts, n, w):
-    """Rozdělí uzavřenou cestu na n otevřených úseků s mezerami (můstky) šířky w."""
+    """Rozdělí uzavřenou cestu na n otevřených úseků s mezerami (můstky) šířky w.
+    Můstky jdou na rovné úseky obrysu (ne na hroty a do ostrých rohů)."""
     cum = [0.0]
     for i in range(len(pts) - 1):
         cum.append(cum[-1] + math.dist(pts[i], pts[i + 1]))
     L = cum[-1]
     if n <= 0 or L < n * w * 4:
         return [(pts, True)]
-    step = L / n
+    cs = _tab_centers(pts, cum, n, w)
     out = []
     for i in range(n):
-        c0 = step * (i + 0.5)                       # střed můstku i
-        c1 = c0 + step                              # střed dalšího
+        c0 = cs[i]
+        c1 = cs[i + 1] if i + 1 < n else cs[0] + L
         d0, d1 = c0 + w / 2, c1 - w / 2
+        if d1 - d0 < 0.05:
+            continue
+        if d0 >= L:
+            d0, d1 = d0 - L, d1 - L
         if d1 <= L:
             seg = _slice(pts, cum, d0, d1)
         else:                                       # přes začátek cesty

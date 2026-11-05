@@ -27,6 +27,7 @@ from . import export as E
 from . import profiles as P
 from .nest import NestSettings, Nester, Placement, check, eff_scale, utilization
 from .part import file_role, guess_pair, load_part, part_name
+from . import testgrid as TG
 
 ROTS = [("Bez otáčení", 0), ("Po 180°", 180), ("Po 90°", 90), ("Po 45°", 45), ("Po 15°", 15)]
 PREC = [("Normální (0,5 mm)", 0.5), ("Rychlá (1 mm)", 1.0), ("Jemná (0,25 mm)", 0.25)]
@@ -447,6 +448,236 @@ def scale_warnings(part, sc):
     return w
 
 
+class GridPreview(QWidget):
+    """Náhled testovací mřížky – kliknutím se vybere buňka."""
+
+    def __init__(self, dlg):
+        super().__init__()
+        self.dlg = dlg
+        self.sel = None
+        self.setMinimumSize(420, 300)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def _xf(self):
+        L = self.dlg.layout_
+        k = min((self.width() - 20) / L.W, (self.height() - 20) / L.H)
+        ox = (self.width() - L.W * k) / 2
+        oy = (self.height() - L.H * k) / 2
+        return k, ox, oy
+
+    def paintEvent(self, e):
+        L = self.dlg.layout_
+        if L is None:
+            return
+        st = self.dlg.settings()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        k, ox, oy = self._xf()
+        p.fillRect(self.rect(), QColor(60, 63, 68))
+        p.fillRect(QRectF(ox, oy, L.W * k, L.H * k), QColor(235, 205, 160))
+        pw, sp = st.powers(), st.speeds()
+        pmax, smin, smax = max(pw) or 1, min(sp), max(sp)
+        for r, c, x, y, size in L.cells:
+            rect = QRectF(ox + x * k, oy + y * k, size * k, size * k)
+            # odhad tmavosti: víc výkonu a méně rychlosti = tmavší (jen orientační)
+            dark = (pw[c] / pmax) * (smin / max(sp[r], 1)) ** 0.5
+            if st.mode == "engrave":
+                v = int(200 - 170 * min(1.0, dark))
+                p.fillRect(rect, QColor(v, int(v * 0.7), int(v * 0.4)))
+            pen = QPen(QColor(200, 0, 0) if st.mode == "cut" else QColor(90, 60, 30), 1.5)
+            p.setPen(pen); p.setBrush(Qt.NoBrush); p.drawRect(rect)
+            if self.sel == (r, c):
+                p.setPen(QPen(QColor(0, 140, 255), 3)); p.drawRect(rect.adjusted(-3, -3, 3, 3))
+        p.setPen(QColor(40, 25, 10))
+        f = p.font(); f.setPixelSize(max(8, int(TG.LABEL_H * k))); p.setFont(f)
+        for text, cx, y in L.col_labels:
+            p.drawText(QRectF(ox + (cx - 15) * k, oy + y * k, 30 * k, TG.LABEL_H * 1.4 * k), Qt.AlignHCenter | Qt.AlignTop, text)
+        for text, xr, cy in L.row_labels:
+            p.drawText(QRectF(ox + (xr - 30) * k, oy + (cy - TG.LABEL_H) * k, 30 * k, TG.LABEL_H * 2 * k),
+                       Qt.AlignRight | Qt.AlignVCenter, text)
+        if L.corner and L.row_labels:
+            p.drawText(QRectF(ox + (L.row_labels[0][1] - 30) * k, oy + L.corner[2] * k, 30 * k, TG.LABEL_H * 1.4 * k),
+                       Qt.AlignRight | Qt.AlignTop, L.corner[0])
+        if st.border:
+            p.setPen(QPen(QColor(200, 0, 0), 1.5)); p.setBrush(Qt.NoBrush)
+            p.drawRect(QRectF(ox + 0.5 * k, oy + 0.5 * k, (L.W - 1) * k, (L.H - 1) * k))
+        p.end()
+
+    def mousePressEvent(self, e):
+        L = self.dlg.layout_
+        if L is None:
+            return
+        k, ox, oy = self._xf()
+        x, y = (e.position().x() - ox) / k, (e.position().y() - oy) / k
+        for r, c, cx, cy, size in L.cells:
+            if cx - 1 <= x <= cx + size + 1 and cy - 1 <= y <= cy + size + 1:
+                self.select(r, c)
+                return
+
+    def select(self, r, c):
+        self.sel = (r, c)
+        self.dlg.cell_selected()
+        self.update()
+
+
+class TestGridDialog(QDialog):
+    """Generátor testovací mřížky (výkon × rychlost) a uložení nejlepší buňky jako profilu."""
+
+    def __init__(self, win, profiles, prof_idx, opts):
+        super().__init__(win)
+        self.win = win
+        self.profiles = profiles
+        self.setWindowTitle(T("Testovací mřížka materiálu"))
+        self.layout_ = None
+        base = profiles[prof_idx]
+        top = QHBoxLayout(self)
+        left = QFormLayout()
+        top.addLayout(left)
+        right = QVBoxLayout()
+        top.addLayout(right, 1)
+        self.prof = QComboBox()
+        for p in profiles:
+            self.prof.addItem(p["name"])
+        self.prof.setCurrentIndex(prof_idx)
+        left.addRow(T("Výchozí profil:"), self.prof)
+        self.mode = QComboBox()
+        self.mode.addItem(T("Gravír – plné čtverečky"), "engrave")
+        self.mode.addItem(T("Řez – obrys čtverečku"), "cut")
+        self.mode.setCurrentIndex(0 if opts.get("mode", "engrave") == "engrave" else 1)
+        left.addRow(T("Test:"), self.mode)
+
+        def dsp(lo, hi, v, dec=1, suf=""):
+            w = QDoubleSpinBox(); w.setRange(lo, hi); w.setDecimals(dec); w.setValue(v); w.setSuffix(suf)
+            w.valueChanged.connect(self.refresh)
+            return w
+
+        def isp(lo, hi, v, suf=""):
+            w = QSpinBox(); w.setRange(lo, hi); w.setValue(int(v)); w.setSuffix(suf)
+            w.valueChanged.connect(self.refresh)
+            return w
+        self.p_from = dsp(0, 100, opts.get("p_from", 20), 1, " %")
+        self.p_to = dsp(0, 100, opts.get("p_to", 100), 1, " %")
+        self.cols = isp(1, 12, opts.get("cols", 5))
+        row = QHBoxLayout(); row.addWidget(self.p_from); row.addWidget(QLabel("–")); row.addWidget(self.p_to)
+        left.addRow(T("Výkon (sloupce):"), row)
+        left.addRow(T("Počet sloupců:"), self.cols)
+        self.s_from = dsp(10, 30000, opts.get("s_from", 1000), 0, " mm/min")
+        self.s_to = dsp(10, 30000, opts.get("s_to", 5000), 0, " mm/min")
+        self.rows = isp(1, 12, opts.get("rows", 5))
+        row = QHBoxLayout(); row.addWidget(self.s_from); row.addWidget(QLabel("–")); row.addWidget(self.s_to)
+        left.addRow(T("Rychlost (řádky):"), row)
+        left.addRow(T("Počet řádků:"), self.rows)
+        self.cell = dsp(3, 40, opts.get("cell", 8), 1, " mm")
+        self.gap = dsp(0.5, 20, opts.get("gap", 2), 1, " mm")
+        left.addRow(T("Čtvereček:"), self.cell)
+        left.addRow(T("Mezera:"), self.gap)
+        self.lpm = dsp(1, 25, float(base.get("lines_per_mm", 10)), 1, T(" ř/mm"))
+        left.addRow(T("Hustota řádků (gravír):"), self.lpm)
+        self.passes = isp(1, 20, opts.get("passes", 1))
+        left.addRow(T("Průchody (řez):"), self.passes)
+        self.labels = QCheckBox(T("Popisky hodnot"))
+        self.labels.setChecked(opts.get("labels", True)); self.labels.toggled.connect(self.refresh)
+        self.l_pow = dsp(0, 100, opts.get("label_power", float(base.get("engrave_power", 40))), 1, " %")
+        self.l_spd = dsp(10, 30000, opts.get("label_speed", float(base.get("engrave_speed", 2000))), 0, " mm/min")
+        row = QHBoxLayout(); row.addWidget(self.labels); row.addWidget(self.l_pow); row.addWidget(self.l_spd)
+        left.addRow(T("Popisky:"), row)
+        self.border = QCheckBox(T("Vyříznout okraj kolem mřížky (nastavení řezu z profilu)"))
+        self.border.setChecked(opts.get("border", False)); self.border.toggled.connect(self.refresh)
+        left.addRow(self.border)
+        self.info = QLabel(""); self.info.setWordWrap(True)
+        left.addRow(self.info)
+        note = QLabel(T("Nula = levý dolní roh mřížky. Mřížku vypal na kousek stejného materiálu,\n"
+                        "pak klikni na nejlepší čtvereček a ulož ho jako profil."))
+        note.setStyleSheet("color: gray")
+        left.addRow(note)
+        self.preview = GridPreview(self)
+        right.addWidget(self.preview, 1)
+        self.sel_lbl = QLabel(T("Klikni v náhledu na čtvereček, který dopadl nejlépe."))
+        right.addWidget(self.sel_lbl)
+        row = QHBoxLayout()
+        b = QPushButton(T("💾  Uložit G-code…")); b.clicked.connect(lambda *_: self.save_gcode()); row.addWidget(b)
+        self.btn_prof = QPushButton(T("Uložit vybraný čtvereček jako profil…"))
+        self.btn_prof.setEnabled(False); self.btn_prof.clicked.connect(lambda *_: self.save_profile())
+        row.addWidget(self.btn_prof)
+        b = QPushButton(T("Zavřít")); b.clicked.connect(lambda *_: self.accept()); row.addWidget(b)
+        right.addLayout(row)
+        self.mode.currentIndexChanged.connect(self.refresh)
+        self.prof.currentIndexChanged.connect(self.refresh)
+        self.resize(1100, 620)
+        self.refresh()
+
+    def settings(self):
+        base = self.profiles[self.prof.currentIndex()]
+        return TG.GridSettings(
+            mode=self.mode.currentData(), p_from=self.p_from.value(), p_to=self.p_to.value(), cols=self.cols.value(),
+            s_from=self.s_from.value(), s_to=self.s_to.value(), rows=self.rows.value(), cell=self.cell.value(),
+            gap=self.gap.value(), lines_per_mm=self.lpm.value(), passes=self.passes.value(),
+            labels=self.labels.isChecked(), label_power=self.l_pow.value(), label_speed=self.l_spd.value(),
+            border=self.border.isChecked(), border_power=float(base.get("cut_power", 100)),
+            border_speed=float(base.get("cut_speed", 300)), border_passes=int(base.get("cut_passes", 1)),
+            s_max=float(base.get("s_max", 1000)), air=bool(base.get("air")))
+
+    def opts(self):
+        st = self.settings()
+        return {"mode": st.mode, "p_from": st.p_from, "p_to": st.p_to, "cols": st.cols, "s_from": st.s_from,
+                "s_to": st.s_to, "rows": st.rows, "cell": st.cell, "gap": st.gap, "passes": st.passes,
+                "labels": st.labels, "label_power": st.label_power, "label_speed": st.label_speed,
+                "border": st.border}
+
+    def refresh(self, *_):
+        st = self.settings()
+        self.lpm.setEnabled(st.mode == "engrave")
+        self.passes.setEnabled(st.mode == "cut")
+        for w in (self.l_pow, self.l_spd):
+            w.setEnabled(st.labels)
+        self.layout_ = TG.layout(st)
+        import tempfile
+        f = os.path.join(tempfile.gettempdir(), f"lasernest_grid_{os.getpid()}.gcode")
+        try:
+            TG.grid_gcode(f, st)
+            t = E.estimate_time(f)
+            os.remove(f)
+        except Exception:
+            t = 0
+        self.info.setText(T("Velikost: {w} × {h} mm · {n} čtverečků · odhad ≈ {m} min",
+                            w=f"{self.layout_.W:.0f}", h=f"{self.layout_.H:.0f}",
+                            n=len(self.layout_.cells), m=f"{t / 60:.0f}"))
+        if self.preview.sel and (self.preview.sel[0] >= st.rows or self.preview.sel[1] >= st.cols):
+            self.preview.sel = None
+            self.btn_prof.setEnabled(False)
+        self.cell_selected() if self.preview.sel else None
+        self.preview.update()
+
+    def cell_selected(self):
+        r, c = self.preview.sel
+        st = self.settings()
+        self.sel_lbl.setText(T("Vybráno: výkon {p} %, rychlost {s} mm/min", p=f"{st.powers()[c]:g}",
+                               s=f"{st.speeds()[r]:g}"))
+        self.btn_prof.setEnabled(True)
+
+    def save_gcode(self):
+        d = self.win.settings.get("export_dir", self.win.last_dir)
+        path, _ = QFileDialog.getSaveFileName(self, T("Uložit G-code"), os.path.join(d, T("testovaci_mrizka") + ".gcode"),
+                                              "G-code (*.gcode *.nc *.gc)")
+        if not path:
+            return
+        TG.grid_gcode(path, self.settings())
+        QMessageBox.information(self, T("Uloženo"), T("Uloženo:\n") + path)
+
+    def save_profile(self):
+        r, c = self.preview.sel
+        st = self.settings()
+        base = self.profiles[self.prof.currentIndex()]
+        default = f"{base['name']} – {st.powers()[c]:g} % / {st.speeds()[r]:g}"
+        name, ok = QInputDialog.getText(self, T("Nový profil"), T("Název profilu (materiál):"), text=default)
+        if not ok or not name.strip():
+            return
+        self.profiles.append(TG.profile_from_cell(base, st, r, c, name.strip()))
+        P.save(self.profiles)
+        self.win._fill_profiles(len(self.profiles) - 1)
+        self.sel_lbl.setText(T("Profil „{name}“ uložen.", name=name.strip()))
+
+
 class ProfileDialog(QDialog):
     def __init__(self, parent, prof):
         super().__init__(parent)
@@ -797,6 +1028,9 @@ class MainWindow(QMainWindow):
                 self.addAction(a)
             else:
                 e.addAction(a)
+        tm = self.menuBar().addMenu(T("Nástroje"))
+        a = QAction(T("Testovací mřížka materiálu…"), self); a.setShortcut("Ctrl+G")
+        a.triggered.connect(lambda *_: self.test_grid_dialog()); tm.addAction(a)
         h = self.menuBar().addMenu(T("Nápověda"))
         lm = h.addMenu(T("Jazyk / Language"))
         for code, name in LANGS:
@@ -1459,6 +1693,13 @@ class MainWindow(QMainWindow):
                 self.add_part(cut, eng)
             else:
                 self.add_part_dialog(cut, eng)     # chybí druhý soubor nebo šířka – ať to uživatel doplní
+
+    # ----------------------------------------------------- testovací mřížka
+    def test_grid_dialog(self):
+        d = TestGridDialog(self, self.profiles, self.prof.currentIndex(), self.settings.get("grid_opts", {}))
+        d.exec()
+        self.settings["grid_opts"] = d.opts()
+        P.save_settings(self._collect_settings())
 
     # -------------------------------------------------------------- jazyk
     def switch_language(self, code):
