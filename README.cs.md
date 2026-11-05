@@ -260,4 +260,7 @@ Deska se převede na rastr obsazenosti (0,5 mm). Pro každý díl a natočení s
 připraví maska obrysu zvětšená o polovinu mezery a všechna volná místa se
 najdou najednou přes FFT. Díl jde na místo co nejblíž zvolenému výchozímu rohu,
 zkusí se několik pořadí a vezme se nejlepší. Při jemné přesnosti se všechna pořadí
-nejdřív zkusí nahrubo (1 mm) a jemně se přepočítají jen dvě nejlepší (několikrát rychlejší). Výsledek se ověří přesnou geometrií.
+nejdřív zkusí nahrubo (1 mm) a jemně se přepočítají jen dvě nejlepší (několikrát rychlejší).
+Nejlepší pořadí se pak ještě vylepšuje náhodným prohazováním dílů (jednoduché genetické hledání) a výsledky
+se řadí tak, aby se **nejdřív vešly všechny zadané kusy**, pak co nejvíc kusů celkem a pak co nejkompaktněji.
+Tip: při malé mezeře používej přesnost *Normální* nebo *Jemná* – krok rotace pod 15° nepomáhá. Výsledek se ověří přesnou geometrií.

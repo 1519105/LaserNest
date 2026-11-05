@@ -258,4 +258,7 @@ The board is turned into an occupancy raster (0.5 mm). For every part and rotati
 of the outline grown by half the gap is prepared, and all free spots are found at once
 using an FFT. Each part goes to the spot closest to the chosen start corner, several
 orders are tried and the best one wins. With fine precision all orders are first tried
-at a coarse 1 mm resolution and only the two best are recomputed finely (several times faster). The result is verified with exact geometry.
+at a coarse 1 mm resolution and only the two best are recomputed finely (several times faster).
+The best order is then improved by random swaps of parts (a simple genetic-style search), and results
+are ranked so that **all requested pieces fit first**, then the most pieces in total, then the most compact layout.
+Tip: with a small gap use *Normal* or *Fine* precision – a rotation step below 15° doesn't help. The result is verified with exact geometry.

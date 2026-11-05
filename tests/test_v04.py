@@ -42,6 +42,23 @@ def test_fast_nesting():
     print(f"OK – rychlé rozmísťování: {len(fast)} ks za {t_fast:.1f} s (plné hledání {len(full)} ks za {t_full:.1f} s)")
 
 
+def test_required_first():
+    """Zadané kusy mají přednost před vyplňováním: dřív vyhrál pokus s víc kusy celkem,
+    i když se jeden zadaný kus nevešel (deska 388×211, přesnost 0,5 mm, 90°)."""
+    ps = [part("oval_merry_christmas"), part("reindeer"), part("tree"),
+          part("oval_merry_christmas"), part("tree")]
+    for p, c, s in zip(ps, (2, 4, 4, 4, 4), (1, 1, 1, .6, .6)):
+        p.count, p.scale = c, s
+    ps[4].fill = True
+    st = NestSettings(388, 211, 1, 1, rot_step=90, res=0.5, trials=15)
+    pl, miss = Nester(ps, st).run()
+    assert not miss, miss
+    for i, p in enumerate(ps):
+        assert sum(1 for q in pl if q.part == i) >= p.count, (i, p.count)
+    assert not check(ps, pl, st)
+    print(f"OK – nejdřív všechny zadané kusy, pak vyplňování ({len(pl)} ks)")
+
+
 def _turn_at_tabs(segs):
     def back(pts):
         acc, i = 0, len(pts) - 1
@@ -189,6 +206,7 @@ def test_grid_gui(out=None):
 
 
 if __name__ == "__main__":
+    test_required_first()
     test_smart_tabs()
     test_grid_engrave()
     test_grid_cut_and_profile()

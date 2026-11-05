@@ -95,9 +95,10 @@ class _Shape:
 class Nester:
     XW = 0.02          # váha vodorovné pozice ve skóre (vůči svislé)
     COARSE = True      # předvýběr pořadí v hrubém rozlišení
-    ADJ = 0.0          # váha dotyku s ostatními díly (maximální přilnutí) ve skóre pozice
+    ADJ = 0.0          # váha dotyku se sousedy ve skóre (testováno 0,3–3: horší výsledky, proto vypnuto)
     MUTATE = True      # vylepšování nejlepšího pořadí prohazováním dílů
-    COMPACT = True     # dotlačení dílů k výchozímu rohu po rozmístění
+    MUT_FACTOR = 1.0   # počet vylepšovacích kroků = pokusy × MUT_FACTOR
+    COMPACT = False    # dotlačení dílů k rohu po rozmístění (testováno: bez zlepšení, jen pomalejší)
 
     def __init__(self, parts, st: NestSettings, progress=None, cancel=None):
         self.parts = parts
@@ -135,11 +136,12 @@ class Nester:
         s.mask = m
         # prstenec kolem dílu (pro výpočet, jak moc se díl dotýká sousedů)
         k = max(1, int(round(1.0 / r)))
-        ring = (np.asarray(im.filter(ImageFilter.MaxFilter(2 * k + 1))) > 0).astype(np.float32) - m
-        pad2 = np.zeros((self.H, self.W), np.float32)
-        pad2[:h, :w] = ring
-        s.ring_fft = np.conj(np.fft.rfft2(pad2)).astype(np.complex64) if self.ADJ > 0 else None
-        s.ring_k = k
+        s.ring_fft, s.ring_k = None, k
+        if self.ADJ > 0:
+            ring = (np.asarray(im.filter(ImageFilter.MaxFilter(2 * k + 1))) > 0).astype(np.float32) - m
+            pad2 = np.zeros((self.H, self.W), np.float32)
+            pad2[:h, :w] = ring
+            s.ring_fft = np.conj(np.fft.rfft2(pad2)).astype(np.complex64)
         s.poly = poly
         return s
 
@@ -288,7 +290,7 @@ class Nester:
             ebase = ev.occ_from(locked) if locked else None
         else:
             ev, ebase = self, base_occ
-        n_mut = self.st.trials if (self.MUTATE and len(req) > 2) else 0
+        n_mut = int(self.st.trials * self.MUT_FACTOR) if (self.MUTATE and len(req) > 2) else 0
         total = len(orders) + n_mut + (2 if use_coarse else 0) + (1 if self.COMPACT else 0)
         step = 0
         scored = []                                    # (klíč, pořadí, výsledek)

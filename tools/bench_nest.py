@@ -54,9 +54,11 @@ def run(variant, res=0.5, trials=10):
 if __name__ == "__main__":
     variants = {
         "puvodni": dict(ADJ=0.0, MUTATE=False, COMPACT=False),
-        "+mutace": dict(ADJ=0.0, MUTATE=True, COMPACT=False),
+        "+mutace": dict(ADJ=0.0, MUTATE=True, COMPACT=False, MUT_FACTOR=1.0),
         "+dotlaceni": dict(ADJ=0.0, MUTATE=False, COMPACT=True),
         "+mutace+dotl": dict(ADJ=0.0, MUTATE=True, COMPACT=True),
+        "mutace x2": dict(ADJ=0.0, MUTATE=True, COMPACT=False, MUT_FACTOR=2.0),
+        "mutace x3": dict(ADJ=0.0, MUTATE=True, COMPACT=False, MUT_FACTOR=3.0),
         "ADJ0.3+vse": dict(ADJ=0.3, MUTATE=True, COMPACT=True),
         "ADJ1+vse": dict(ADJ=1.0, MUTATE=True, COMPACT=True),
         "ADJ3+vse": dict(ADJ=3.0, MUTATE=True, COMPACT=True),
