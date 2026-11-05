@@ -98,6 +98,7 @@ def _evenodd(polylines):
 class CutPath:
     pts: list            # [(x, y)] mm
     closed: bool
+    hole: bool = False   # uzavřená cesta uvnitř jiné (otvor) – kerf jde dovnitř, bez můstků
 
     @property
     def area(self):
@@ -117,10 +118,81 @@ class Part:
     count: int = 1
     fill: bool = False
     meta: dict = field(default_factory=dict)
+    scale: float = 1.0                # měřítko objektu (všechny kusy)
+    erase: list = field(default_factory=list)   # body [(x, y) mm] smazaných ostrůvků gravíru
+
+    def __post_init__(self):
+        self._img0 = self.engrave_img.copy() if self.engrave_img is not None else None
+        self._vec0 = self.engrave_vec
 
     @property
     def area(self):
         return self.outline.area
+
+    # ------------------------------------------------ úpravy gravíru
+    def _erase_one(self, x, y):
+        """Smaže souvislý ostrůvek gravíru u bodu (x, y) v mm (lokální souřadnice dílu).
+        Hledá nejbližší vypalovaný bod do 1,5 mm. Vrací True, pokud něco smazal."""
+        if self.engrave_img is None:
+            return False
+        if self.engrave_vec is not None:
+            from shapely.geometry import Point
+            g = self.engrave_vec
+            polys = list(g.geoms) if hasattr(g, "geoms") else [g]
+            pt = Point(x, y)
+            cand = [(p.distance(pt), i) for i, p in enumerate(polys)]
+            cand = [c for c in cand if c[0] <= 1.5]
+            if not cand:
+                return False
+            k = min(cand)[1]
+            rest = [p for i, p in enumerate(polys) if i != k]
+            self.engrave_vec = unary_union(rest) if rest else Polygon()
+            w, h = self.engrave_img.width / self.img_res, self.engrave_img.height / self.img_res
+            self.engrave_img = rasterize(self.engrave_vec, w, h, self.img_res)
+            return True
+        a = np.asarray(self.engrave_img)
+        r = self.img_res
+        px, py = int(x * r), int(y * r)
+        R = max(1, int(1.5 * r))
+        x0, y0 = max(0, px - R), max(0, py - R)
+        win = a[y0:py + R + 1, x0:px + R + 1] < 128
+        if not win.any():
+            return False
+        ys, xs = np.nonzero(win)
+        d = (xs + x0 - px) ** 2 + (ys + y0 - py) ** 2
+        k = int(np.argmin(d))
+        if d[k] > R * R:
+            return False
+        sx, sy = int(xs[k] + x0), int(ys[k] + y0)
+        img = self.engrave_img.copy()
+        ImageDraw.floodfill(img, (sx, sy), 255, thresh=127)
+        # dočištění pixelů spojených jen úhlopříčně (floodfill je 4-směrný)
+        self.engrave_img = img
+        return True
+
+    def erase_at(self, x, y):
+        if self._erase_one(x, y):
+            self.erase.append((round(x, 3), round(y, 3)))
+            return True
+        return False
+
+    def set_erase(self, points):
+        """Obnoví gravír z originálu a znovu aplikuje seznam smazaných bodů."""
+        self.engrave_img = self._img0.copy() if self._img0 is not None else None
+        self.engrave_vec = self._vec0
+        self.erase = []
+        for x, y in points:
+            self.erase_at(x, y)
+
+    def min_hole_mm(self):
+        """Nejmenší rozměr uzavřeného otvoru (při měřítku 1), nebo None."""
+        best = None
+        for cp in self.cut:
+            if cp.hole:
+                xs = [p[0] for p in cp.pts]; ys = [p[1] for p in cp.pts]
+                m = min(max(xs) - min(xs), max(ys) - min(ys))
+                best = m if best is None else min(best, m)
+        return best
 
 
 def load_cut(path):
@@ -137,6 +209,14 @@ def load_cut(path):
             paths.append(CutPath(pts, closed))
     if not paths:
         raise ValueError(f"V souboru řezu nejsou žádné čáry: {os.path.basename(path)}")
+    # otvory = uzavřené cesty ležící uvnitř jiné (větší) uzavřené cesty
+    cl = [(cp, make_valid(Polygon(cp.pts))) for cp in paths if cp.closed and len(cp.pts) > 3]
+    for cp, poly in cl:
+        rp = poly.representative_point()
+        for cp2, poly2 in cl:
+            if cp2 is not cp and poly2.area > poly.area and poly2.contains(rp):
+                cp.hole = True
+                break
     geoms = []
     for cp in paths:
         if cp.closed and len(cp.pts) > 3:

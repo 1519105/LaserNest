@@ -5,7 +5,9 @@ import json
 import math
 import os
 import sys
+import time
 import traceback
+from dataclasses import asdict
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal, QObject
@@ -22,7 +24,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
 from . import __version__
 from . import export as E
 from . import profiles as P
-from .nest import NestSettings, Nester, Placement, check, utilization
+from .nest import NestSettings, Nester, Placement, check, eff_scale, utilization
 from .part import file_role, guess_pair, load_part, part_name
 
 ROTS = [("Bez otáčení", 0), ("Po 180°", 180), ("Po 90°", 90), ("Po 45°", 45), ("Po 15°", 15)]
@@ -42,21 +44,14 @@ def pil_to_qimage(img):
 
 # =================================================================== scéna
 class PartItem(QGraphicsItem):
-    def __init__(self, win, part_idx, part, angle=0.0, tx=0.0, ty=0.0):
+    def __init__(self, win, part_idx, part, angle=0.0, tx=0.0, ty=0.0, scale=1.0, locked=False):
         super().__init__()
         self.win = win
         self.part_idx = part_idx
         self.part = part
+        self.inst_scale = float(scale or 1.0)
+        self.locked = bool(locked)
         self.bad = False
-        cw, ch = part.meta.get("canvas", (part.outline.bounds[2], part.outline.bounds[3]))
-        if part.engrave_img is not None:
-            cw = max(cw, part.engrave_img.width / part.img_res)
-            ch = max(ch, part.engrave_img.height / part.img_res)
-        minx, miny, maxx, maxy = part.outline.bounds
-        self._rect = QRectF(min(0, minx), min(0, miny), max(cw, maxx) - min(0, minx), max(ch, maxy) - min(0, miny))
-        self._pix = QPixmap.fromImage(pil_to_qimage(part.engrave_img)) if part.engrave_img is not None else None
-        self._pix_rect = (QRectF(0, 0, part.engrave_img.width / part.img_res, part.engrave_img.height / part.img_res)
-                          if part.engrave_img is not None else None)
         self._cut = QPainterPath()
         for cp in part.cut:
             self._cut.moveTo(*cp.pts[0])
@@ -70,23 +65,56 @@ class PartItem(QGraphicsItem):
         for x, y in ext[1:]:
             self._outline.lineTo(x, y)
         self._outline.closeSubpath()
+        self.refresh_image()
         self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemIsSelectable |
                       QGraphicsItem.ItemSendsGeometryChanges)
         self.setTransformOriginPoint(0, 0)
         self.setRotation(angle)
+        self.setScale(self.eff())
         self.setPos(tx, ty)
-        self.setCursor(Qt.OpenHandCursor)
+        self.update_flags()
+
+    def eff(self):
+        return float(getattr(self.part, "scale", 1.0) or 1.0) * self.inst_scale
+
+    def refresh_image(self):
+        """Znovu načte gravír (po smazání ostrůvků) a obdélník kreslení."""
+        part = self.part
+        self.prepareGeometryChange()
+        cw, ch = part.meta.get("canvas", (part.outline.bounds[2], part.outline.bounds[3]))
+        if part.engrave_img is not None:
+            cw = max(cw, part.engrave_img.width / part.img_res)
+            ch = max(ch, part.engrave_img.height / part.img_res)
+        minx, miny, maxx, maxy = part.outline.bounds
+        self._rect = QRectF(min(0, minx), min(0, miny), max(cw, maxx) - min(0, minx), max(ch, maxy) - min(0, miny))
+        self._pix = QPixmap.fromImage(pil_to_qimage(part.engrave_img)) if part.engrave_img is not None else None
+        self._pix_rect = (QRectF(0, 0, part.engrave_img.width / part.img_res, part.engrave_img.height / part.img_res)
+                          if part.engrave_img is not None else None)
+        self.update()
+
+    def update_flags(self):
+        movable = not self.locked and not self.win.edit_mode
+        self.setFlag(QGraphicsItem.ItemIsMovable, movable)
+        if self.win.edit_mode:
+            self.setCursor(Qt.CrossCursor)
+        else:
+            self.setCursor(Qt.ForbiddenCursor if self.locked else Qt.OpenHandCursor)
 
     def boundingRect(self):
         return self._rect.adjusted(-1, -1, 1, 1)
 
     def shape(self):
+        if self.win.edit_mode:
+            p = QPainterPath(); p.addRect(self._rect); return p
         return self._outline
 
     def paint(self, p: QPainter, opt, widget=None):
-        fill = QColor(235, 205, 160) if not self.bad else QColor(255, 150, 150)
-        if self.isSelected():
-            fill = QColor(200, 225, 255) if not self.bad else QColor(255, 120, 160)
+        if self.bad:
+            fill = QColor(255, 120, 160) if self.isSelected() else QColor(255, 150, 150)
+        elif self.locked:
+            fill = QColor(170, 200, 245) if self.isSelected() else QColor(200, 220, 245)
+        else:
+            fill = QColor(200, 225, 255) if self.isSelected() else QColor(235, 205, 160)
         p.setPen(Qt.NoPen)
         p.setBrush(fill)
         p.drawPath(self._outline)
@@ -99,6 +127,10 @@ class PartItem(QGraphicsItem):
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
         p.drawPath(self._cut)
+        if self.locked:
+            pen = QPen(QColor(40, 90, 200), 1.6, Qt.DashLine); pen.setCosmetic(True)
+            p.setPen(pen)
+            p.drawPath(self._outline)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionHasChanged:
@@ -106,26 +138,49 @@ class PartItem(QGraphicsItem):
         return super().itemChange(change, value)
 
     def mousePressEvent(self, e):
-        self.setCursor(Qt.ClosedHandCursor)
+        if self.win.edit_mode and e.button() == Qt.LeftButton:
+            self.win.erase_at(self, e.pos().x(), e.pos().y())
+            e.accept()
+            return
+        if e.button() == Qt.LeftButton and not self.locked:
+            self.win.push_undo()
+            self.setCursor(Qt.ClosedHandCursor)
         super().mousePressEvent(e)
 
     def mouseReleaseEvent(self, e):
-        self.setCursor(Qt.OpenHandCursor)
+        self.update_flags()
         super().mouseReleaseEvent(e)
 
     def placement(self):
-        return Placement(self.part_idx, self.rotation() % 360, self.pos().x(), self.pos().y())
+        return Placement(self.part_idx, self.rotation() % 360, self.pos().x(), self.pos().y(),
+                         scale=self.inst_scale, locked=self.locked)
+
+    def center(self):
+        """Těžiště obrysu v souřadnicích desky."""
+        c = self.part.outline.centroid
+        return self.mapToScene(QPointF(c.x, c.y))
+
+    def _keep_center(self, fn):
+        w0 = self.center()
+        fn()
+        w1 = self.center()
+        self.setPos(self.pos() + (w0 - w1))
 
     def rotate_about_center(self, delta):
-        c = self.part.outline.centroid
-        a0 = math.radians(self.rotation())
-        wx = self.pos().x() + math.cos(a0) * c.x - math.sin(a0) * c.y
-        wy = self.pos().y() + math.sin(a0) * c.x + math.cos(a0) * c.y
-        a1 = (self.rotation() + delta) % 360
-        r1 = math.radians(a1)
-        self.setRotation(a1)
-        self.setPos(wx - (math.cos(r1) * c.x - math.sin(r1) * c.y),
-                    wy - (math.sin(r1) * c.x + math.cos(r1) * c.y))
+        self._keep_center(lambda: self.setRotation((self.rotation() + delta) % 360))
+
+    def set_angle(self, angle):
+        self._keep_center(lambda: self.setRotation(angle % 360))
+
+    def set_inst_scale(self, s):
+        def f():
+            self.inst_scale = max(0.01, float(s))
+            self.setScale(self.eff())
+        self._keep_center(f)
+
+    def apply_part_scale(self):
+        """Po změně měřítka objektu – zachová střed kusu."""
+        self._keep_center(lambda: self.setScale(self.eff()))
 
 
 class BoardView(QGraphicsView):
@@ -150,6 +205,17 @@ class BoardView(QGraphicsView):
         super().resizeEvent(e)
         self.fit()
 
+    def keyPressEvent(self, e):
+        k = e.key()
+        if k in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down) and self.win.selected():
+            step = 10.0 if e.modifiers() & Qt.ShiftModifier else (0.1 if e.modifiers() & Qt.AltModifier else 1.0)
+            dx = {Qt.Key_Left: -step, Qt.Key_Right: step}.get(k, 0.0)
+            dy = {Qt.Key_Up: -step, Qt.Key_Down: step}.get(k, 0.0)
+            self.win.nudge(dx, dy)
+            e.accept()
+            return
+        super().keyPressEvent(e)
+
     def contextMenuEvent(self, e):
         it = self.itemAt(e.pos())
         while it is not None and not isinstance(it, PartItem):
@@ -165,8 +231,21 @@ class BoardView(QGraphicsView):
         if st and st not in (90, 180):
             m.addAction(f"Otočit o {st}°  (T)", lambda: self.win.rotate_selected(st))
         m.addSeparator()
+        m.addAction("Transformace… (měřítko, úhel)  (Ctrl+T)", self.win.transform_dialog)
+        m.addAction("Zvětšit o 5 %  (+)", lambda: self.win.scale_selected(1.05))
+        m.addAction("Zmenšit o 5 %  (−)", lambda: self.win.scale_selected(1 / 1.05))
+        m.addAction("Původní měřítko kusu (100 %)", lambda: self.win.scale_selected(None))
+        m.addSeparator()
+        sel = self.win.selected()
+        if sel and all(i.locked for i in sel):
+            m.addAction("Odemknout  (L)", self.win.toggle_lock)
+        else:
+            m.addAction("Zamknout na místě  (L)", self.win.toggle_lock)
         m.addAction("Duplikovat  (Ctrl+D)", self.win.duplicate_selected)
         m.addAction("Smazat  (Del)", self.win.delete_selected)
+        if sel:
+            m.addSeparator()
+            m.addAction("Obnovit smazaný gravír objektu", lambda: self.win.reset_engrave(sel[0].part_idx))
         m.exec(e.globalPos())
 
 
@@ -176,9 +255,9 @@ class NestWorker(QObject):
     done = Signal(object, object)
     failed = Signal(str)
 
-    def __init__(self, parts, st):
+    def __init__(self, parts, st, locked=()):
         super().__init__()
-        self.parts, self.st = parts, st
+        self.parts, self.st, self.locked = parts, st, list(locked)
         self._cancel = False
 
     def cancel(self):
@@ -188,7 +267,7 @@ class NestWorker(QObject):
         try:
             n = Nester(self.parts, self.st, progress=lambda a, b: self.progress.emit(a, b),
                        cancel=lambda: self._cancel)
-            pl, miss = n.run()
+            pl, miss = n.run(locked=self.locked)
             self.done.emit(pl, miss)
         except Exception:
             self.failed.emit(traceback.format_exc())
@@ -274,6 +353,70 @@ class AddPartDialog(QDialog):
         super().accept()
 
 
+class TransformDialog(QDialog):
+    """Měřítko (%, nebo šířka/výška v mm – rovnoměrně) a případně přesný úhel."""
+
+    def __init__(self, parent, part, eff, angle=None, title="Transformace", multi=False):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.part = part
+        minx, miny, maxx, maxy = part.outline.bounds
+        self.w0, self.h0 = maxx - minx, maxy - miny        # rozměr při 100 %
+        lay = QFormLayout(self)
+        self.pct = QDoubleSpinBox(); self.pct.setRange(1, 2000); self.pct.setDecimals(1); self.pct.setSuffix(" %")
+        self.wmm = QDoubleSpinBox(); self.wmm.setRange(0.1, 5000); self.wmm.setDecimals(1); self.wmm.setSuffix(" mm")
+        self.hmm = QDoubleSpinBox(); self.hmm.setRange(0.1, 5000); self.hmm.setDecimals(1); self.hmm.setSuffix(" mm")
+        lay.addRow("Měřítko:", self.pct)
+        lay.addRow("Šířka:", self.wmm)
+        lay.addRow("Výška:", self.hmm)
+        if multi:
+            self.wmm.setEnabled(False); self.hmm.setEnabled(False)
+            lay.addRow(QLabel("(víc různých objektů – rozměr v mm nastav po jednom)"))
+        self.ang = None
+        if angle is not None:
+            self.ang = QDoubleSpinBox(); self.ang.setRange(-360, 360); self.ang.setDecimals(1); self.ang.setSuffix(" °")
+            self.ang.setValue(angle)
+            lay.addRow("Úhel:", self.ang)
+        note = QLabel("Měřítko je vždy rovnoměrné (šířka i výška stejně).")
+        note.setStyleSheet("color: gray")
+        lay.addRow(note)
+        self.warn = QLabel(""); self.warn.setStyleSheet("color: #e05050"); self.warn.setWordWrap(True)
+        lay.addRow(self.warn)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept); bb.rejected.connect(self.reject)
+        lay.addRow(bb)
+        self._busy = False
+        self.pct.valueChanged.connect(lambda v: self._set(v / 100))
+        self.wmm.valueChanged.connect(lambda v: self._set(v / self.w0))
+        self.hmm.valueChanged.connect(lambda v: self._set(v / self.h0))
+        self._set(eff)
+
+    def _set(self, sc):
+        if self._busy:
+            return
+        self._busy = True
+        self.sc = max(0.01, sc)
+        self.pct.setValue(self.sc * 100)
+        self.wmm.setValue(self.w0 * self.sc)
+        self.hmm.setValue(self.h0 * self.sc)
+        self.warn.setText("\n".join(scale_warnings(self.part, self.sc)))
+        self._busy = False
+
+    def angle(self):
+        return None if self.ang is None else self.ang.value()
+
+
+def scale_warnings(part, sc):
+    w = []
+    if part.engrave_img is not None and part.engrave_vec is None and sc > 1.5:
+        w.append(f"⚠ Gravír je obrázek – při {sc * 100:.0f} % má jen {part.img_res / sc:.1f} bodu/mm "
+                 "(bude zubatější). Lepší je SVG gravír.")
+    h = part.min_hole_mm()
+    if h is not None and h * sc < 2.5:
+        w.append(f"⚠ Nejmenší otvor bude jen {h * sc:.1f} mm (pod 2,5 mm).")
+    return w
+
+
 class ProfileDialog(QDialog):
     def __init__(self, parent, prof):
         super().__init__(parent)
@@ -288,7 +431,11 @@ class ProfileDialog(QDialog):
             elif typ is int:
                 w = QSpinBox(); w.setRange(lo, hi); w.setValue(int(prof.get(key, lo)))
             else:
-                w = QDoubleSpinBox(); w.setRange(lo, hi); w.setDecimals(1); w.setValue(float(prof.get(key, lo)))
+                w = QDoubleSpinBox(); w.setRange(lo, hi)
+                w.setDecimals(2 if key == "kerf" else 1)
+                if key == "kerf":
+                    w.setSingleStep(0.01)
+                w.setValue(float(prof.get(key, lo) or 0))
             self.w[key] = w
             lay.addRow(label + ":", w)
         note = QLabel("Výkon v % se převádí na S podle „Max. S“ (GRBL $30, obvykle 1000).\n"
@@ -320,10 +467,10 @@ class ExportDialog(QDialog):
         lay.addRow("Složka:", row)
         self.base = QLineEdit(base)
         lay.addRow("Název souborů:", self.base)
-        self.c_svg = QCheckBox("Barevné SVG  (černá = gravír, červená = řez) – LightBurn apod.")
+        self.c_svg = QCheckBox("Barevné SVG  (černá = gravír, červená = řez) – jen pro LightBurn / Inkscape")
         self.c_grbl = QCheckBox("LaserGRBL: gravír PNG + řez SVG (plátno = deska)")
         self.c_gc = QCheckBox("G-code (gravír + řez v jednom souboru)")
-        self.c_svg.setChecked(opts.get("svg", True))
+        self.c_svg.setChecked(opts.get("svg", False))
         self.c_grbl.setChecked(opts.get("grbl", True))
         self.c_gc.setChecked(opts.get("gcode", True))
         for c in (self.c_svg, self.c_grbl, self.c_gc):
@@ -344,10 +491,59 @@ class ExportDialog(QDialog):
         self.what.addItems(["Gravír + řez", "Jen gravír", "Jen řez", "Dva soubory (gravír a řez zvlášť)"])
         self.what.setCurrentIndex(opts.get("what", 0))
         gl.addRow("Obsah:", self.what)
+        self.order = QComboBox()
+        self.order.addItem("Nejdřív všechen gravír, potom řez", "all")
+        self.order.addItem("Po dílech (u každého dílu gravír a hned řez)", "part")
+        self.order.setCurrentIndex(0 if opts.get("order", "all") == "all" else 1)
+        gl.addRow("Pořadí:", self.order)
         self.pause = QCheckBox("Pauza (M0) mezi gravírem a řezem")
         self.pause.setChecked(opts.get("pause", False))
         gl.addRow(self.pause)
+        self.order.currentIndexChanged.connect(lambda *_: self.pause.setEnabled(self.order.currentData() == "all"))
+        self.pause.setEnabled(self.order.currentData() == "all")
         lay.addRow(g)
+
+        gc = QGroupBox("Řez (platí pro G-code i SVG)")
+        cl = QFormLayout(gc)
+        row = QHBoxLayout()
+        self.tabs = QSpinBox(); self.tabs.setRange(0, 20); self.tabs.setValue(opts.get("tabs", 0))
+        self.tabs.setSpecialValueText("bez můstků"); self.tabs.setSuffix(" na díl")
+        self.tab_w = QDoubleSpinBox(); self.tab_w.setRange(0.1, 5); self.tab_w.setDecimals(2); self.tab_w.setSingleStep(0.1)
+        self.tab_w.setValue(opts.get("tab_w", 0.5)); self.tab_w.setSuffix(" mm")
+        row.addWidget(self.tabs); row.addWidget(QLabel("šířka")); row.addWidget(self.tab_w)
+        cl.addRow("Můstky:", row)
+        self.kerf_lbl = QLabel("")
+        cl.addRow("Kerf:", self.kerf_lbl)
+        self._profiles = profiles
+        self.prof.currentIndexChanged.connect(lambda *_: self._upd_kerf())
+        self._upd_kerf()
+        lay.addRow(gc)
+
+        gf = QGroupBox("Rám (framing) – kontrola polohy desky")
+        fl = QFormLayout(gf)
+        self.f_file = QCheckBox("Samostatný soubor  …_0_ram.gcode")
+        self.f_file.setChecked(opts.get("frame_file", True))
+        fl.addRow(self.f_file)
+        self.f_first = QCheckBox("Rám i na začátek hlavního G-code + pauza (M0)")
+        self.f_first.setChecked(opts.get("frame_first", False))
+        fl.addRow(self.f_first)
+        self.f_kind = QComboBox()
+        self.f_kind.addItem("Obdélník kolem všech dílů", "box")
+        self.f_kind.addItem("Obrys tvarů („gumička“)", "hull")
+        self.f_kind.setCurrentIndex(0 if opts.get("frame_kind", "box") == "box" else 1)
+        fl.addRow("Tvar:", self.f_kind)
+        self.f_pow = QDoubleSpinBox(); self.f_pow.setRange(0, 100); self.f_pow.setDecimals(1); self.f_pow.setSingleStep(0.5)
+        self.f_pow.setSuffix(" %"); self.f_pow.setSpecialValueText("0 % (laser vypnutý)")
+        self.f_pow.setValue(opts.get("frame_power", 1.0))
+        fl.addRow("Výkon:", self.f_pow)
+        self.f_speed = QSpinBox(); self.f_speed.setRange(100, 20000); self.f_speed.setSingleStep(500)
+        self.f_speed.setSuffix(" mm/min"); self.f_speed.setValue(opts.get("frame_speed", 3000))
+        fl.addRow("Rychlost:", self.f_speed)
+        fnote = QLabel("Diodový laser bez ukazovátka: 0,5–1 % je vidět jako slabá tečka a nepálí.\n"
+                       "Při rámu měj ochranné brýle.")
+        fnote.setStyleSheet("color: gray")
+        fl.addRow(fnote)
+        lay.addRow(gf)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText("Exportovat")
         bb.accepted.connect(self.accept); bb.rejected.connect(self.reject)
@@ -359,10 +555,18 @@ class ExportDialog(QDialog):
         if d:
             self.folder.setText(d)
 
+    def _upd_kerf(self):
+        k = float(self._profiles[self.prof.currentIndex()].get("kerf", 0) or 0)
+        self.kerf_lbl.setText(f"{k:.2f} mm (z profilu)" if k else "vypnutý (nastavíš v profilu laseru)")
+
     def opts(self):
         return {"svg": self.c_svg.isChecked(), "grbl": self.c_grbl.isChecked(), "gcode": self.c_gc.isChecked(),
                 "origin": self.origin.currentData(), "what": self.what.currentIndex(),
-                "pause": self.pause.isChecked()}
+                "pause": self.pause.isChecked(), "order": self.order.currentData(),
+                "tabs": self.tabs.value(), "tab_w": self.tab_w.value(),
+                "frame_file": self.f_file.isChecked(), "frame_first": self.f_first.isChecked(),
+                "frame_kind": self.f_kind.currentData(), "frame_power": self.f_pow.value(),
+                "frame_speed": self.f_speed.value()}
 
 
 # ============================================================= hlavní okno
@@ -377,6 +581,9 @@ class MainWindow(QMainWindow):
         self.last_dir = self.settings.get("last_dir", os.path.expanduser("~"))
         self.profiles = P.load()
         self._thread = None
+        self.edit_mode = False
+        self._undo, self._redo = [], []
+        self._last_nudge = 0.0
         self._check_timer = QTimer(self); self._check_timer.setSingleShot(True)
         self._check_timer.timeout.connect(self.recheck)
 
@@ -418,11 +625,13 @@ class MainWindow(QMainWindow):
 
         go = QGroupBox("Objekty")
         ov = QVBoxLayout(go)
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Název", "Počet", "Vyplnit", "Rozměr"])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Název", "Počet", "Vyplnit", "Měřítko", "Rozměr [mm]"])
+        self.table.horizontalHeaderItem(4).setToolTip("Dvojklik = zadat šířku nebo výšku v mm")
+        self.table.cellDoubleClicked.connect(self._cell_dbl)
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.Stretch)
-        for c in (1, 2, 3):
+        for c in (1, 2, 3, 4):
             hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -437,6 +646,7 @@ class MainWindow(QMainWindow):
         b.clicked.connect(lambda *_: self.add_one()); row.addWidget(b)
         ov.addLayout(row)
         tip = QLabel("„Vyplnit“ = po umístění zadaných kusů doplní objekt do zbytku desky.\n"
+                     "Měřítko platí pro všechny kusy objektu, dvojklik na Rozměr = zadat mm.\n"
                      "Soubory lze na okno i přetáhnout.")
         tip.setStyleSheet("color: gray"); tip.setWordWrap(True)
         ov.addWidget(tip)
@@ -447,8 +657,16 @@ class MainWindow(QMainWindow):
         self.btn_nest.setStyleSheet("font-weight: bold; padding: 8px")
         self.btn_nest.clicked.connect(lambda *_: self.run_nest())
         row.addWidget(self.btn_nest)
+        self.btn_nest.setToolTip("Zamčené díly zůstanou na místě, doskládá se jen zbytek do zadaných počtů.")
         b = QPushButton("Vyčistit desku"); b.clicked.connect(lambda *_: self.clear_board()); row.addWidget(b)
+        b.setToolTip("Smaže nezamčené díly (když zbývají jen zamčené, smaže i ty).")
         lv.addLayout(row)
+        self.btn_edit = QPushButton("✎  Upravit gravír (E)")
+        self.btn_edit.setCheckable(True)
+        self.btn_edit.setToolTip("Kliknutím na část gravíru (tečku, nápis…) ji smažeš u všech kusů objektu.\n"
+                                 "Vrácení: Ctrl+Z, nebo pravé tlačítko → Obnovit smazaný gravír.")
+        self.btn_edit.toggled.connect(self.set_edit_mode)
+        lv.addWidget(self.btn_edit)
 
         gp = QGroupBox("Profil laseru")
         pv = QHBoxLayout(gp)
@@ -469,7 +687,9 @@ class MainWindow(QMainWindow):
         self.info.setWordWrap(True)
         lv.addWidget(self.info)
         help_ = QLabel("Myš: táhni = posun, kolečko = zoom, pravé tl. = menu.\n"
-                       "R / Shift+R = otočit o 90°, T = otočit o krok, Del = smazat, Ctrl+D = duplikovat.")
+                       "Šipky = posun 1 mm (Shift 10 mm, Alt 0,1 mm), R / Shift+R = otočit o 90°, T = o krok,\n"
+                       "+ / − = měřítko ±5 %, Ctrl+T = transformace, L = zamknout, E = úprava gravíru,\n"
+                       "Ctrl+Z / Ctrl+Y = zpět / znovu, Del = smazat, Ctrl+D = duplikovat.")
         help_.setStyleSheet("color: gray"); help_.setWordWrap(True)
         lv.addWidget(help_)
         lv.addStretch(1)
@@ -480,6 +700,7 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(1, 1)
         self.setCentralWidget(split)
         self._menus()
+        self.scene.selectionChanged.connect(self._sel_changed)
         self.setAcceptDrops(True)
         self.update_board()
         self.resize(1300, 850)
@@ -504,14 +725,35 @@ class MainWindow(QMainWindow):
                 m.addSeparator(); continue
             a = QAction(text, self); a.setShortcut(key); a.triggered.connect(lambda *_, fn=fn: fn()); m.addAction(a)
         e = self.menuBar().addMenu("Úpravy")
-        for text, key, fn in (("Otočit o 90° doprava", "R", lambda: self.rotate_selected(90)),
+        for text, key, fn in (("Zpět", QKeySequence.Undo, self.undo),
+                              ("Znovu", ["Ctrl+Y", "Ctrl+Shift+Z"], self.redo),
+                              (None, None, None),
+                              ("Transformace… (měřítko, úhel)", "Ctrl+T", self.transform_dialog),
+                              ("Zvětšit o 5 %", "+", lambda: self.scale_selected(1.05)),
+                              ("Zvětšit o 5 % ", "=", lambda: self.scale_selected(1.05)),
+                              ("Zmenšit o 5 %", "-", lambda: self.scale_selected(1 / 1.05)),
+                              ("Zamknout / odemknout", "L", self.toggle_lock),
+                              ("Upravit gravír (mazání kliknutím)", "E", lambda: self.btn_edit.toggle()),
+                              (None, None, None),
+                              ("Otočit o 90° doprava", "R", lambda: self.rotate_selected(90)),
                               ("Otočit o 90° doleva", "Shift+R", lambda: self.rotate_selected(-90)),
                               ("Otočit o krok", "T", lambda: self.rotate_selected(self.rot_step() or 90)),
                               ("Duplikovat", "Ctrl+D", self.duplicate_selected),
                               ("Smazat", QKeySequence.Delete, self.delete_selected),
                               ("Vybrat vše", QKeySequence.SelectAll, self.select_all),
                               ("Přizpůsobit zobrazení", "F", self.view.fit)):
-            a = QAction(text, self); a.setShortcut(key); a.triggered.connect(lambda *_, fn=fn: fn()); e.addAction(a)
+            if text is None:
+                e.addSeparator(); continue
+            a = QAction(text.strip(), self)
+            if isinstance(key, list):
+                a.setShortcuts([QKeySequence(k) for k in key])
+            else:
+                a.setShortcut(key)
+            a.triggered.connect(lambda *_, fn=fn: fn())
+            if text.endswith(" "):          # záložní zkratka – akce jen pro klávesu, v menu se neukazuje
+                self.addAction(a)
+            else:
+                e.addAction(a)
         h = self.menuBar().addMenu("Nápověda")
         h.addAction("O programu", lambda: QMessageBox.about(
             self, "LaserNest", f"LaserNest {__version__}\nRozmístění dílů pro laser (gravír + řez)\n"
@@ -557,6 +799,47 @@ class MainWindow(QMainWindow):
     def placements(self):
         return [it.placement() for it in self.items]
 
+    # ---------------------------------------------------------- zpět/znovu
+    def snapshot(self):
+        return {"pl": [asdict(p) for p in self.placements()],
+                "scale": [p.scale for p in self.parts],
+                "erase": [list(p.erase) for p in self.parts]}
+
+    def push_undo(self):
+        s = self.snapshot()
+        if self._undo and self._undo[-1] == s:
+            return
+        self._undo.append(s)
+        del self._undo[:-100]
+        self._redo.clear()
+
+    def _restore(self, s):
+        for i, p in enumerate(self.parts):
+            if i < len(s["scale"]):
+                p.scale = s["scale"][i]
+                if p.erase != s["erase"][i]:
+                    p.set_erase(s["erase"][i])
+                self._update_row(i)
+        self.set_placements([Placement(**d) for d in s["pl"]])
+
+    def undo(self):
+        cur = self.snapshot()
+        while self._undo:
+            s = self._undo.pop()
+            if s != cur:
+                self._redo.append(cur)
+                self._restore(s)
+                return
+
+    def redo(self):
+        if not self._redo:
+            return
+        self._undo.append(self.snapshot())
+        self._restore(self._redo.pop())
+
+    def _clear_history(self):
+        self._undo.clear(); self._redo.clear()
+
     def set_placements(self, pls):
         for it in self.items:
             self.scene.removeItem(it)
@@ -566,10 +849,16 @@ class MainWindow(QMainWindow):
         self.recheck()
 
     def _add_item(self, pl):
-        it = PartItem(self, pl.part, self.parts[pl.part], pl.angle, pl.tx, pl.ty)
+        it = PartItem(self, pl.part, self.parts[pl.part], pl.angle, pl.tx, pl.ty, pl.scale, pl.locked)
         self.scene.addItem(it)
         self.items.append(it)
         return it
+
+    def _sel_changed(self):
+        try:
+            self._check_timer.start(60)
+        except RuntimeError:          # při zavírání okna
+            pass
 
     def geometry_changed(self):
         self._check_timer.start(120)
@@ -598,6 +887,25 @@ class MainWindow(QMainWindow):
             txt.append(f"<b>Využití desky:</b> {utilization(self.parts, pls, st) * 100:.1f} %")
         if bad:
             txt.append(f"<span style='color:#d00'><b>⚠ {len(bad)} dílů koliduje nebo přesahuje okraj</b></span>")
+        nl = sum(1 for pl in pls if pl.locked)
+        if nl:
+            txt.append(f"🔒 Zamčeno: {nl} ks")
+        sel = [it for it in self.items if it.isSelected()]
+        if sel:
+            sc = sorted({round(it.eff() * 100) for it in sel})
+            txt.append(f"<b>Vybráno:</b> {len(sel)} ks · měřítko " + ", ".join(f"{v} %" for v in sc[:4]))
+        warns = []
+        for i, p in enumerate(self.parts):
+            scs = [eff_scale(self.parts, pl) for pl in pls if pl.part == i] or [p.scale]
+            for w in scale_warnings(p, max(scs)) + (scale_warnings(p, min(scs)) if min(scs) != max(scs) else []):
+                w = f"{p.name}: {w[2:]}"
+                if w not in warns:
+                    warns.append(w)
+        for w in warns:
+            txt.append(f"<span style='color:#c60'>⚠ {w}</span>")
+        if self.edit_mode:
+            txt.append("<span style='color:#06c'><b>✎ Úprava gravíru:</b> klikni na část gravíru, kterou chceš smazat "
+                       "(platí pro všechny kusy objektu). Ctrl+Z vrací.</span>")
         if getattr(self, "_missing", None):
             miss = {}
             for i in self._missing:
@@ -633,6 +941,7 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         p.count, p.fill = count, fill
+        self._clear_history()
         self.parts.append(p)
         self.last_dir = os.path.dirname(cut or eng)
         self._add_row(p)
@@ -653,10 +962,44 @@ class MainWindow(QMainWindow):
         cb.toggled.connect(lambda v, p=p: setattr(p, "fill", v))
         w = QWidget(); l = QHBoxLayout(w); l.addWidget(cb); l.setAlignment(Qt.AlignCenter); l.setContentsMargins(0, 0, 0, 0)
         self.table.setCellWidget(r, 2, w)
-        minx, miny, maxx, maxy = p.outline.bounds
-        it = QTableWidgetItem(f"{maxx - minx:.0f}×{maxy - miny:.0f}")
+        ss = QSpinBox(); ss.setRange(1, 2000); ss.setSuffix(" %"); ss.setValue(round(p.scale * 100))
+        ss.setKeyboardTracking(False)
+        ss.valueChanged.connect(lambda v, p=p: self.set_part_scale(p, v / 100))
+        self.table.setCellWidget(r, 3, ss)
+        it = QTableWidgetItem("")
         it.setFlags(it.flags() & ~Qt.ItemIsEditable)
-        self.table.setItem(r, 3, it)
+        it.setToolTip("Dvojklik = zadat šířku nebo výšku v mm")
+        self.table.setItem(r, 4, it)
+        self._update_row(r)
+
+    def _update_row(self, r):
+        if r >= len(self.parts) or self.table.item(r, 4) is None:
+            return
+        p = self.parts[r]
+        minx, miny, maxx, maxy = p.outline.bounds
+        self.table.item(r, 4).setText(f"{(maxx - minx) * p.scale:.1f} × {(maxy - miny) * p.scale:.1f}")
+        ss = self.table.cellWidget(r, 3)
+        if ss is not None and ss.value() != round(p.scale * 100):
+            ss.blockSignals(True); ss.setValue(round(p.scale * 100)); ss.blockSignals(False)
+
+    def _cell_dbl(self, r, c):
+        if c in (3, 4) and r < len(self.parts):
+            p = self.parts[r]
+            d = TransformDialog(self, p, p.scale, title=f"Měřítko objektu – {p.name}")
+            if d.exec() == QDialog.Accepted:
+                self.set_part_scale(p, d.sc)
+
+    def set_part_scale(self, p, sc):
+        if abs(p.scale - sc) < 1e-9:
+            return
+        self.push_undo()
+        p.scale = sc
+        i = self.parts.index(p)
+        for it in self.items:
+            if it.part_idx == i:
+                it.apply_part_scale()
+        self._update_row(i)
+        self.recheck()
 
     def _name_changed(self, it):
         if it.column() == 0 and it.row() < len(self.parts):
@@ -672,6 +1015,7 @@ class MainWindow(QMainWindow):
                 pl.part -= 1
         self.parts.pop(r)
         self.table.removeRow(r)
+        self._clear_history()
         self.set_placements(pls)
 
     def add_one(self):
@@ -685,6 +1029,7 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
         if pl is None:
             QMessageBox.information(self, "Info", "Na desce už pro tento objekt není místo."); return
+        self.push_undo()
         it = self._add_item(pl)
         self.scene.clearSelection(); it.setSelected(True)
         self.recheck()
@@ -696,11 +1041,13 @@ class MainWindow(QMainWindow):
         if not any(p.count > 0 or p.fill for p in self.parts):
             QMessageBox.information(self, "Info", "Zadej počet kusů nebo zatrhni „Vyplnit“."); return
         st = self.nest_settings()
+        self.push_undo()
+        self._locked = [pl for pl in self.placements() if pl.locked]
         self._prog = QProgressDialog("Rozmísťuji…", "Zrušit", 0, max(1, st.trials), self)
         self._prog.setWindowModality(Qt.WindowModal)
         self._prog.setMinimumDuration(200)
         self._thread = QThread(self)
-        self._worker = NestWorker(self.parts, st)
+        self._worker = NestWorker(self.parts, st, self._locked)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._nest_progress)
@@ -722,7 +1069,7 @@ class MainWindow(QMainWindow):
     def _nest_done(self, pls, missing):
         self._finish_thread()
         self._missing = missing
-        self.set_placements(pls)
+        self.set_placements(list(self._locked) + list(pls))
         if missing:
             QMessageBox.warning(self, "Nevešlo se", f"{len(missing)} kusů se na desku nevešlo.")
 
@@ -731,29 +1078,126 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Chyba", tb)
 
     def clear_board(self):
+        self.push_undo()
         self._missing = []
-        self.set_placements([])
+        keep = [pl for pl in self.placements() if pl.locked]
+        if len(keep) == len(self.items):
+            keep = []
+        self.set_placements(keep)
 
     # -------------------------------------------------------- ruční úpravy
     def selected(self):
         return [it for it in self.items if it.isSelected()]
 
     def rotate_selected(self, d):
-        for it in self.selected():
+        sel = [i for i in self.selected() if not i.locked]
+        if not sel:
+            return
+        self.push_undo()
+        for it in sel:
             it.rotate_about_center(d)
+        self.recheck()
+
+    def nudge(self, dx, dy):
+        sel = [i for i in self.selected() if not i.locked]
+        if not sel:
+            return
+        now = time.monotonic()
+        if now - self._last_nudge > 1.0:      # série stisků šipek = jeden krok zpět
+            self.push_undo()
+        self._last_nudge = now
+        for it in sel:
+            it.setPos(it.pos() + QPointF(dx, dy))
+        self.recheck()
+
+    def scale_selected(self, factor):
+        """factor = násobek měřítka kusu, None = vrátit kus na 100 % (měřítko objektu zůstává)."""
+        sel = [i for i in self.selected() if not i.locked]
+        if not sel:
+            return
+        self.push_undo()
+        for it in sel:
+            it.set_inst_scale(1.0 if factor is None else it.inst_scale * factor)
+        self.recheck()
+
+    def transform_dialog(self):
+        sel = [i for i in self.selected() if not i.locked]
+        if not sel:
+            QMessageBox.information(self, "Info", "Vyber na desce díl (zamčené díly nejdou měnit)."); return
+        first = sel[0]
+        multi = len({i.part_idx for i in sel}) > 1
+        a0 = round(first.rotation() % 360, 1)
+        d = TransformDialog(self, first.part, first.eff(), angle=a0,
+                            title=f"Transformace – {len(sel)} ks", multi=multi)
+        if d.exec() != QDialog.Accepted:
+            return
+        self.push_undo()
+        for it in sel:
+            it.set_inst_scale(d.sc / (it.part.scale or 1.0))
+            if abs(d.angle() - a0) > 1e-6:
+                it.set_angle(d.angle())
+        self.recheck()
+
+    def toggle_lock(self):
+        sel = self.selected()
+        if not sel:
+            return
+        self.push_undo()
+        new = not all(i.locked for i in sel)
+        for it in sel:
+            it.locked = new
+            it.update_flags()
+            it.update()
+        self.recheck()
+
+    def set_edit_mode(self, on):
+        self.edit_mode = bool(on)
+        if self.btn_edit.isChecked() != self.edit_mode:
+            self.btn_edit.setChecked(self.edit_mode)
+        self.view.setDragMode(QGraphicsView.NoDrag if on else QGraphicsView.RubberBandDrag)
+        for it in self.items:
+            it.prepareGeometryChange()
+            it.update_flags()
+        self.recheck()
+
+    def erase_at(self, item, x, y):
+        p = item.part
+        before = self.snapshot()
+        if p.erase_at(x, y):
+            self._undo.append(before); del self._undo[:-100]; self._redo.clear()
+            for it in self.items:
+                if it.part is p:
+                    it.refresh_image()
+            self.recheck()
+        else:
+            self.statusBar().showMessage("Tady není žádný gravír (klikni přímo na čáru nebo tečku).", 3000)
+
+    def reset_engrave(self, idx):
+        p = self.parts[idx]
+        if not p.erase:
+            return
+        self.push_undo()
+        p.set_erase([])
+        for it in self.items:
+            if it.part is p:
+                it.refresh_image()
         self.recheck()
 
     def delete_selected(self):
         sel = self.selected()
+        if sel:
+            self.push_undo()
         for it in sel:
             self.scene.removeItem(it); self.items.remove(it)
         self.recheck()
 
     def duplicate_selected(self):
         new = []
+        if self.selected():
+            self.push_undo()
         for it in self.selected():
             pl = it.placement()
-            pl.tx += 10; pl.ty += 10
+            pl.tx += 10; pl.ty += 10; pl.locked = False
             new.append(self._add_item(pl))
         self.scene.clearSelection()
         for it in new:
@@ -805,26 +1249,34 @@ class MainWindow(QMainWindow):
         prof = self.profiles[d.prof.currentIndex()]
         W, H = st.board_w, st.board_h
         out = []
+        cut_opts = {"kerf": float(prof.get("kerf", 0) or 0), "tabs": o["tabs"], "tab_w": o["tab_w"]}
+        frame = {"kind": o["frame_kind"], "power": o["frame_power"], "speed": o["frame_speed"]}
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)
             j = lambda s: os.path.join(folder, base + s)
             if o["svg"]:
-                E.svg_combined(j(".svg"), self.parts, pls, W, H); out.append(j(".svg"))
+                E.svg_combined(j(".svg"), self.parts, pls, W, H, cut_opts=cut_opts); out.append(j(".svg"))
             if o["grbl"]:
                 E.png_engrave(j("_1_gravir.png"), self.parts, pls, W, H, float(prof.get("lines_per_mm", 10)))
-                E.svg_cut(j("_2_rez.svg"), self.parts, pls, W, H)
+                E.svg_cut(j("_2_rez.svg"), self.parts, pls, W, H, cut_opts=cut_opts)
                 out += [j("_1_gravir.png"), j("_2_rez.svg")]
             if o["gcode"]:
-                kw = dict(pause=o["pause"], origin=o["origin"])
+                kw = dict(pause=o["pause"], origin=o["origin"], tabs=o["tabs"], tab_w=o["tab_w"])
+                ff = frame if o["frame_first"] else None
                 files = []
                 if o["what"] == 3:
-                    E.gcode(j("_1_gravir.gcode"), self.parts, pls, W, H, prof, do_cut=False, **kw)
+                    E.gcode(j("_1_gravir.gcode"), self.parts, pls, W, H, prof, do_cut=False, frame=ff, **kw)
                     E.gcode(j("_2_rez.gcode"), self.parts, pls, W, H, prof, do_engrave=False, **kw)
                     files = [j("_1_gravir.gcode"), j("_2_rez.gcode")]
                 else:
-                    E.gcode(j(".gcode"), self.parts, pls, W, H, prof,
+                    E.gcode(j(".gcode"), self.parts, pls, W, H, prof, order=o["order"], frame=ff,
                             do_engrave=o["what"] in (0, 1), do_cut=o["what"] in (0, 2), **kw)
                     files = [j(".gcode")]
+                if o["frame_file"]:
+                    E.frame_gcode(j("_0_ram.gcode"), self.parts, pls, W, H, kind=o["frame_kind"],
+                                  power=o["frame_power"], speed=o["frame_speed"],
+                                  s_max=float(prof.get("s_max", 1000)), origin=o["origin"])
+                    out.append(j("_0_ram.gcode") + "   (rám)")
                 for fl in files:
                     t = E.estimate_time(fl)
                     out.append(f"{fl}   (odhad ≈ {t / 60:.0f} min)")
@@ -837,6 +1289,8 @@ class MainWindow(QMainWindow):
         if o["grbl"]:
             msg += (f"\n\nLaserGRBL: načti …_1_gravir.png, velikost {W:g} × {H:g} mm, offset 0/0, vypal;\n"
                     "pak …_2_rez.svg se stejnou velikostí a offsetem 0/0.")
+        if o["gcode"] and o["frame_file"]:
+            msg += "\n\nNejdřív spusť …_0_ram.gcode a zkontroluj, že rám leží na desce."
         if o["gcode"]:
             msg += ("\n\nG-code: nulu nastav do " +
                     ("levého dolního" if o["origin"] == "bl" else "levého horního") +
@@ -846,7 +1300,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------- projekt
     def new_project(self):
         self.parts = []; self.table.setRowCount(0); self.project_path = None
-        self.clear_board()
+        self._missing = []
+        self.set_placements([])
+        self._clear_history()
 
     def save_project(self, as_=False):
         path = self.project_path
@@ -858,9 +1314,10 @@ class MainWindow(QMainWindow):
             if not path.endswith(".lnest"):
                 path += ".lnest"
         st = self.nest_settings()
-        data = {"version": 1, "board": st.__dict__,
+        data = {"version": 2, "board": st.__dict__,
                 "parts": [{"name": p.name, "cut": p.cut_file, "engrave": p.engrave_file,
-                           "count": p.count, "fill": p.fill, "width_mm": p.meta.get("width_mm", 0.0)} for p in self.parts],
+                           "count": p.count, "fill": p.fill, "width_mm": p.meta.get("width_mm", 0.0),
+                           "scale": p.scale, "erase": p.erase} for p in self.parts],
                 "placements": [pl.__dict__ for pl in self.placements()]}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -886,7 +1343,16 @@ class MainWindow(QMainWindow):
             eng = p.get("engrave") or ""
             if eng and not os.path.isabs(eng):
                 eng = os.path.join(base, eng)
-            self.add_part(cut, eng, p.get("name"), p.get("count", 1), p.get("fill", False), p.get("width_mm", 0.0))
+            q = self.add_part(cut, eng, p.get("name"), p.get("count", 1), p.get("fill", False), p.get("width_mm", 0.0))
+            if q is not None:
+                q.scale = float(p.get("scale", 1.0) or 1.0)
+                if p.get("erase"):
+                    q.set_erase([tuple(e) for e in p["erase"]])
+                self._update_row(len(self.parts) - 1)
+                cb = self.table.cellWidget(len(self.parts) - 1, 2)
+                if cb is not None:
+                    cb.findChild(QCheckBox).setChecked(q.fill)
+        self._clear_history()
         self.set_placements([Placement(**d) for d in data.get("placements", []) if d["part"] < len(self.parts)])
         self.project_path = path
         self.setWindowTitle(f"LaserNest {__version__} – {os.path.basename(path)}")

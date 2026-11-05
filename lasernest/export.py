@@ -7,50 +7,62 @@ import math
 
 import numpy as np
 from PIL import Image, ImageChops
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Polygon
+from shapely.ops import unary_union
 
-from .nest import apply, matrix, transform_geom
+from .nest import apply, eff_scale, place_geom, place_matrix
 
 
 # ------------------------------------------------------------ gravír rastr
+def _tile(parts, pl, res, W, H):
+    """Gravír jednoho kusu vykreslený do výřezu desky -> (x0, y0, tile L) nebo None."""
+    p = parts[pl.part]
+    if p.engrave_img is None:
+        return None
+    sc = eff_scale(parts, pl)
+    cw, ch = p.engrave_img.width / p.img_res, p.engrave_img.height / p.img_res
+    m = place_matrix(parts, pl)
+    corners = [apply(m, x, y) for x, y in ((0, 0), (cw, 0), (cw, ch), (0, ch))]
+    x0 = max(0, int(math.floor(min(c[0] for c in corners) * res)))
+    y0 = max(0, int(math.floor(min(c[1] for c in corners) * res)))
+    x1 = min(W, int(math.ceil(max(c[0] for c in corners) * res)))
+    y1 = min(H, int(math.ceil(max(c[1] for c in corners) * res)))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    # výstupní pixel -> mm desky -> mm dílu: local = R^T (board - t) / s -> px zdroje
+    # (PIL pracuje se spojitými souřadnicemi: pixel i = <i, i+1))
+    a = math.radians(pl.angle)
+    c, s = math.cos(a), math.sin(a)
+    k = p.img_res / (res * sc)
+    q = p.img_res / sc
+    A, B = c * k, s * k
+    C = q * (c * (x0 / res - pl.tx) + s * (y0 / res - pl.ty))
+    D, E = -s * k, c * k
+    F = q * (-s * (x0 / res - pl.tx) + c * (y0 / res - pl.ty))
+    exact = (pl.angle % 90 == 0) and abs(sc - 1.0) < 1e-9 and abs(p.img_res - res) < 1e-9
+    resample = Image.NEAREST if exact else Image.BILINEAR
+    tile = p.engrave_img.transform((x1 - x0, y1 - y0), Image.AFFINE, (A, B, C, D, E, F),
+                                   resample=resample, fillcolor=255)
+    if not exact:
+        tile = tile.point(lambda v: 0 if v < 128 else 255)
+    return x0, y0, tile
+
+
 def board_raster(parts, placements, board_w, board_h, res):
     """Celá deska jako obrázek L (0 = pálit), res px/mm, počátek levý horní roh."""
     W, H = round(board_w * res), round(board_h * res)
     board = Image.new("L", (W, H), 255)
     for pl in placements:
-        p = parts[pl.part]
-        if p.engrave_img is None:
+        t = _tile(parts, pl, res, W, H)
+        if t is None:
             continue
-        cw, ch = p.engrave_img.width / p.img_res, p.engrave_img.height / p.img_res
-        m = matrix(pl.angle, pl.tx, pl.ty)
-        corners = [apply(m, x, y) for x, y in ((0, 0), (cw, 0), (cw, ch), (0, ch))]
-        x0 = max(0, int(math.floor(min(c[0] for c in corners) * res)))
-        y0 = max(0, int(math.floor(min(c[1] for c in corners) * res)))
-        x1 = min(W, int(math.ceil(max(c[0] for c in corners) * res)))
-        y1 = min(H, int(math.ceil(max(c[1] for c in corners) * res)))
-        if x1 <= x0 or y1 <= y0:
-            continue
-        # výstupní pixel (u,v) -> mm desky -> mm dílu (inverzní rotace) -> px zdroje
-        a = math.radians(pl.angle)
-        c, s = math.cos(a), math.sin(a)
-        k = p.img_res / res
-        # PIL pracuje se spojitými souřadnicemi (pixel i = <i, i+1)): local = R^T (board - t)
-        A = c * k;  B = s * k
-        C = p.img_res * (c * (x0 / res - pl.tx) + s * (y0 / res - pl.ty))
-        D = -s * k; E = c * k
-        F = p.img_res * (-s * (x0 / res - pl.tx) + c * (y0 / res - pl.ty))
-        src = p.engrave_img
-        resample = Image.NEAREST if pl.angle % 90 == 0 else Image.BILINEAR
-        tile = src.transform((x1 - x0, y1 - y0), Image.AFFINE, (A, B, C, D, E, F),
-                             resample=resample, fillcolor=255)
-        if resample != Image.NEAREST:
-            tile = tile.point(lambda v: 0 if v < 128 else 255)
-        region = board.crop((x0, y0, x1, y1))
+        x0, y0, tile = t
+        region = board.crop((x0, y0, x0 + tile.width, y0 + tile.height))
         board.paste(ImageChops.darker(region, tile), (x0, y0))
     return board
 
 
-def _engrave_blocks(a, gap_px):
+def _engrave_blocks(a, gap_px, start=(0, 0)):
     """Rozdělí bitmapu na souvislé ostrůvky (běhy v sousedních řádcích, které se
     překrývají, + běhy v řádku blíž než gap_px). Vrací seznam bloků
     [(řádek, [(x0, x1), ...]), ...] seřazený nejbližším sousedem."""
@@ -105,7 +117,7 @@ def _engrave_blocks(a, gap_px):
         bl = [(v, sorted(r)) for v, r in sorted(rows.items())]
         blocks.append(bl)
     # pořadí bloků: nejbližší soused (začátek bloku = levý konec prvního řádku)
-    out, cur = [], (0, 0)
+    out, cur = [], start
     left = blocks
     while left:
         k = min(range(len(left)), key=lambda i: (left[i][0][1][0][0] - cur[0]) ** 2 + (left[i][0][0] - cur[1]) ** 2)
@@ -115,39 +127,93 @@ def _engrave_blocks(a, gap_px):
     return out
 
 
-def _nn_order(parts, placements):
-    """Díly seřazené nejbližším sousedem od počátku (levý horní roh)."""
+def _nn_order(parts, placements, start=(0.0, 0.0)):
+    """Kusy seřazené nejbližším sousedem od počátku (levý horní roh)."""
     pts = []
     for pl in placements:
-        m = matrix(pl.angle, pl.tx, pl.ty)
-        pts.append(apply(m, *parts[pl.part].outline.centroid.coords[0]))
-    out, cur, left = [], (0.0, 0.0), list(range(len(placements)))
+        pts.append(apply(place_matrix(parts, pl), *parts[pl.part].outline.centroid.coords[0]))
+    out, cur, left = [], start, list(range(len(placements)))
     while left:
         k = min(left, key=lambda i: (pts[i][0] - cur[0]) ** 2 + (pts[i][1] - cur[1]) ** 2)
         left.remove(k); out.append(placements[k]); cur = pts[k]
     return out
 
 
-def board_cut_paths(parts, placements, optimize=True):
-    """Seznam řezných cest [(pts, closed)] v pořadí: po dílech, uvnitř dílu
-    nejdřív menší (otvory), nakonec vnější obrys. Díly řazeny nejbližším sousedem."""
-    items = []
-    for pl in placements:
-        p = parts[pl.part]
-        m = matrix(pl.angle, pl.tx, pl.ty)
-        paths = sorted(p.cut, key=lambda cp: (cp.closed, cp.area))
-        tp = [([apply(m, x, y) for x, y in cp.pts], cp.closed) for cp in paths]
-        cx, cy = apply(m, *p.outline.centroid.coords[0])
-        items.append(((cx, cy), tp))
-    if optimize and items:
-        order, cur, left = [], (0.0, 0.0), list(range(len(items)))
-        while left:
-            k = min(left, key=lambda i: (items[i][0][0] - cur[0]) ** 2 + (items[i][0][1] - cur[1]) ** 2)
-            left.remove(k); order.append(k); cur = items[k][0]
-        items = [items[i] for i in order]
+def _kerf(pts, hole, kerf):
+    """Posune uzavřenou cestu o polovinu šířky řezu: obrys ven, otvor dovnitř."""
+    d = kerf / 2 * (-1 if hole else 1)
+    g = Polygon(pts).buffer(d, join_style=1, quad_segs=6)
+    if g.is_empty:
+        return pts
+    if not isinstance(g, Polygon):
+        g = max(g.geoms, key=lambda q: q.area)
+    return list(g.exterior.coords)
+
+
+def _slice(pts, cum, d0, d1):
+    """Část lomené čáry mezi vzdálenostmi d0 < d1 (podél cesty)."""
     out = []
-    for _, tp in items:
-        out += tp
+    for i in range(len(pts) - 1):
+        a, b = cum[i], cum[i + 1]
+        if b < d0 or a > d1 or b == a:
+            continue
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        t0 = max(0.0, (d0 - a) / (b - a))
+        t1 = min(1.0, (d1 - a) / (b - a))
+        p0 = (x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0)
+        p1 = (x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1)
+        if not out:
+            out.append(p0)
+        out.append(p1)
+    return out
+
+
+def _tabs(pts, n, w):
+    """Rozdělí uzavřenou cestu na n otevřených úseků s mezerami (můstky) šířky w."""
+    cum = [0.0]
+    for i in range(len(pts) - 1):
+        cum.append(cum[-1] + math.dist(pts[i], pts[i + 1]))
+    L = cum[-1]
+    if n <= 0 or L < n * w * 4:
+        return [(pts, True)]
+    step = L / n
+    out = []
+    for i in range(n):
+        c0 = step * (i + 0.5)                       # střed můstku i
+        c1 = c0 + step                              # střed dalšího
+        d0, d1 = c0 + w / 2, c1 - w / 2
+        if d1 <= L:
+            seg = _slice(pts, cum, d0, d1)
+        else:                                       # přes začátek cesty
+            seg = _slice(pts, cum, d0, L) + _slice(pts, cum, 0.0, d1 - L)[1:]
+        if len(seg) > 1:
+            out.append((seg, False))
+    return out
+
+
+def part_cut_paths(parts, pl, kerf=0.0, tabs=0, tab_w=0.5):
+    """Řezné cesty jednoho kusu v souřadnicích desky: nejdřív otevřené a otvory, nakonec obrys."""
+    p = parts[pl.part]
+    m = place_matrix(parts, pl)
+    out = []
+    for cp in sorted(p.cut, key=lambda c: (c.closed, not c.hole, c.area)):
+        pts = [apply(m, x, y) for x, y in cp.pts]
+        if cp.closed and len(pts) > 3:
+            if kerf > 0:
+                pts = _kerf(pts, cp.hole, kerf)
+            if tabs > 0 and not cp.hole:
+                out += _tabs(pts, int(tabs), float(tab_w))
+                continue
+        out.append((pts, cp.closed))
+    return out
+
+
+def board_cut_paths(parts, placements, optimize=True, kerf=0.0, tabs=0, tab_w=0.5):
+    """Řezné cesty celé desky [(pts, closed)] – po kusech (nejbližší soused)."""
+    order = _nn_order(parts, placements) if optimize else placements
+    out = []
+    for pl in order:
+        out += part_cut_paths(parts, pl, kerf, tabs, tab_w)
     return out
 
 
@@ -163,10 +229,10 @@ def _d(pts, closed):
     return s + (" Z" if closed else "")
 
 
-def svg_cut(path, parts, placements, board_w, board_h):
+def svg_cut(path, parts, placements, board_w, board_h, cut_opts=None):
     with open(path, "w", encoding="utf-8") as f:
         f.write(_hdr(board_w, board_h))
-        for pts, closed in board_cut_paths(parts, placements):
+        for pts, closed in board_cut_paths(parts, placements, **(cut_opts or {})):
             f.write(f'  <path d="{_d(pts, closed)}" fill="none" stroke="#ff0000" stroke-width="0.1"/>\n')
         f.write("</svg>\n")
 
@@ -180,7 +246,7 @@ def _png_b64(img):
     return base64.b64encode(b.getvalue()).decode()
 
 
-def svg_combined(path, parts, placements, board_w, board_h, include_board=False):
+def svg_combined(path, parts, placements, board_w, board_h, include_board=False, cut_opts=None):
     """Jedno SVG: vrstva 'gravir' (černá výplň / vložený obrázek) + vrstva 'rez' (červená)."""
     with open(path, "w", encoding="utf-8") as f:
         f.write(_hdr(board_w, board_h))
@@ -191,7 +257,7 @@ def svg_combined(path, parts, placements, board_w, board_h, include_board=False)
         cache = {}
         for pl in placements:
             p = parts[pl.part]
-            tr = f'translate({pl.tx:.4f},{pl.ty:.4f}) rotate({pl.angle:.4f})'
+            tr = f'translate({pl.tx:.4f},{pl.ty:.4f}) rotate({pl.angle:.4f}) scale({eff_scale(parts, pl):.5f})'
             if p.engrave_vec is not None:
                 g = p.engrave_vec
                 ds = []
@@ -209,7 +275,7 @@ def svg_combined(path, parts, placements, board_w, board_h, include_board=False)
                 f.write(f'    <image transform="{tr}" x="0" y="0" width="{w:.3f}" height="{h:.3f}" '
                         f'preserveAspectRatio="none" xlink:href="data:image/png;base64,{cache[pl.part]}"/>\n')
         f.write('  </g>\n  <g id="rez">\n')
-        for pts, closed in board_cut_paths(parts, placements):
+        for pts, closed in board_cut_paths(parts, placements, **(cut_opts or {})):
             f.write(f'    <path d="{_d(pts, closed)}" fill="none" stroke="#ff0000" stroke-width="0.1"/>\n')
         f.write("  </g>\n</svg>\n")
 
@@ -226,83 +292,171 @@ def _f(v):
     return s if s not in ("-0", "") else "0"
 
 
-def gcode(path, parts, placements, board_w, board_h, prof, *, do_engrave=True, do_cut=True,
-          pause=False, origin="bl"):
-    """prof: dict s klíči engrave_speed, engrave_power, lines_per_mm, cut_speed, cut_power,
-    cut_passes, s_max, air.  origin 'bl' = nula v levém dolním rohu desky, 'tl' = levý horní."""
-    smax = float(prof.get("s_max", 1000))
-    def Y(y):  # převod z osy Y dolů na stroj
-        return board_h - y if origin == "bl" else -y
-    lines = [f"; LaserNest – deska {_f(board_w)} x {_f(board_h)} mm, {len(placements)} dílů",
-             f"; profil: {prof.get('name', '')}",
-             "; nula = " + ("levý dolní roh desky" if origin == "bl" else "levý horní roh desky (Y do minusu)"),
-             "G21", "G90", "M5"]
-    if prof.get("air"):
-        lines.append("M8")
-    stats = {}
-    if do_engrave and any(parts[p.part].engrave_img is not None for p in placements):
-        res = float(prof.get("lines_per_mm", 10))
-        img = board_raster(parts, placements, board_w, board_h, res)
-        a = np.asarray(img) < 128
-        S = _f(smax * float(prof["engrave_power"]) / 100)
-        F = _f(float(prof["engrave_speed"]))
-        gap_px = int(3 * res)             # mezery do 3 mm projíždí G1 S0 (plynulejší)
-        lines += ["; ---- GRAVÍR ----", f"M4 S0", f"G1 F{F}"]
-        n_rows = 0
-        cur = (0.0, 0.0)
-        for block in _engrave_blocks(a, gap_px):
-            # blok = souvislý ostrůvek gravíru; řádky se jedou střídavě tam a zpět,
-            # směr každého řádku se volí podle toho, který konec je blíž
+class _G:
+    """Pomocník pro zápis G-code (osa Y desky dolů -> stroj)."""
+
+    def __init__(self, board_h, origin):
+        self.lines = []
+        self.board_h, self.origin = board_h, origin
+        self.cur = (0.0, 0.0)          # poslední pozice v mm desky
+        self.rows = 0
+
+    def Y(self, y):
+        return self.board_h - y if self.origin == "bl" else -y
+
+    def add(self, *ln):
+        self.lines += ln
+
+    def engrave(self, a, res, x_off, y_off, S, F, gap_px):
+        """a = bool bitmapa výřezu, (x_off, y_off) = jeho poloha v px desky."""
+        if not a.any():
+            return
+        self.add(f"G1 F{F}")
+        start = (self.cur[0] * res - x_off, self.cur[1] * res - y_off)
+        for block in _engrave_blocks(a, gap_px, start):
+            # řádky střídavě tam a zpět; směr řádku podle bližšího konce
             for v, runs in block:
-                n_rows += 1
-                y = (v + 0.5) / res
-                left = runs[0][0] / res
-                right = runs[-1][1] / res
-                if math.hypot(cur[0] - right, cur[1] - y) < math.hypot(cur[0] - left, cur[1] - y):
-                    seq = [(b_, a_) for a_, b_ in reversed(runs)]
+                self.rows += 1
+                y = (v + y_off + 0.5) / res
+                left = (runs[0][0] + x_off) / res
+                right = (runs[-1][1] + x_off) / res
+                if math.hypot(self.cur[0] - right, self.cur[1] - y) < math.hypot(self.cur[0] - left, self.cur[1] - y):
+                    seq = [(b_ + x_off, a_ + x_off) for a_, b_ in reversed(runs)]
                 else:
-                    seq = runs
-                yy = _f(Y(y))
-                prev_end = None
+                    seq = [(a_ + x_off, b_ + x_off) for a_, b_ in runs]
+                yy = _f(self.Y(y))
+                prev = None
                 for r0, r1 in seq:
                     xs, xe = _f(r0 / res), _f(r1 / res)
-                    if prev_end is None:
-                        lines.append(f"G0 X{xs} Y{yy}")
-                    elif abs(r0 - prev_end) <= gap_px:
-                        lines.append(f"G1 X{xs} S0")
+                    if prev is None:
+                        self.add(f"G0 X{xs} Y{yy}")
+                    elif abs(r0 - prev) <= gap_px:
+                        self.add(f"G1 X{xs} S0")
                     else:
-                        lines.append(f"G0 X{xs}")
-                    lines.append(f"G1 X{xe} S{S}")
-                    prev_end = r1
-                cur = (prev_end / res, y)
-        lines.append("M5")
-        stats["engrave_rows"] = n_rows
-    if do_cut:
-        if pause and do_engrave:
-            lines += ["; ---- PAUZA před řezem (pokračuj tlačítkem Resume/Cycle start) ----", "M0"]
-        S = _f(smax * float(prof["cut_power"]) / 100)
-        F = _f(float(prof["cut_speed"]))
-        passes = max(1, int(prof.get("cut_passes", 1)))
-        lines += ["; ---- ŘEZ ----", "M3 S0"]
-        n = 0
-        for pts, closed in board_cut_paths(parts, placements):
-            n += 1
+                        self.add(f"G0 X{xs}")
+                    self.add(f"G1 X{xe} S{S}")
+                    prev = r1
+                self.cur = (prev / res, y)
+
+    def cut(self, paths, S, F, passes):
+        for pts, closed in paths:
             for k in range(passes):
                 x, y = pts[0]
-                lines.append(f"G0 X{_f(x)} Y{_f(Y(y))}")
-                if k == 0:
-                    lines.append(f"G1 F{F} S{S}")
+                self.add(f"G0 X{_f(x)} Y{_f(self.Y(y))}", f"G1 F{F} S{S}")
                 for x, y in pts[1:]:
-                    lines.append(f"G1 X{_f(x)} Y{_f(Y(y))} S{S}")
-        lines.append("M5")
-        stats["cut_paths"] = n
-    if prof.get("air"):
-        lines.append("M9")
-    lines += ["G0 X0 Y0", "M2"]
+                    self.add(f"G1 X{_f(x)} Y{_f(self.Y(y))} S{S}")
+                self.cur = pts[-1]
+
+
+def frame_points(parts, placements, kind="box"):
+    """Obrys rámu v mm desky: 'box' = obdélník kolem všeho, 'hull' = „gumička“ kolem tvarů."""
+    if not placements:
+        return []
+    g = unary_union([place_geom(parts, pl) for pl in placements])
+    if kind == "hull":
+        h = g.convex_hull
+        return list(h.exterior.coords) if isinstance(h, Polygon) else []
+    x0, y0, x1, y1 = g.bounds
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+
+
+def _frame_lines(G, pts, power, speed, smax, passes=1):
+    if not pts:
+        return
+    S = _f(smax * float(power) / 100)
+    F = _f(float(speed))
+    on = float(power) > 0
+    G.add(f"; ---- RÁM ({'laser ' + _f(float(power)) + ' %' if on else 'laser vypnutý'}) ----",
+          "M3 S0" if on else "M5")
+    for _ in range(max(1, int(passes))):
+        x, y = pts[0]
+        G.add(f"G0 X{_f(x)} Y{_f(G.Y(y))}", f"G1 F{F} S{S if on else 0}")
+        for x, y in pts[1:]:
+            G.add(f"G1 X{_f(x)} Y{_f(G.Y(y))} S{S if on else 0}")
+    G.add("M5")
+    G.cur = pts[-1]
+
+
+def frame_gcode(path, parts, placements, board_w, board_h, *, kind="box", power=0.0, speed=3000,
+                s_max=1000, origin="bl", passes=1):
+    """Samostatný soubor rámu – laser objede oblast úlohy (při výkonu 0 jen jede, nepálí)."""
+    G = _G(board_h, origin)
+    G.add(f"; LaserNest – rám ({'obdélník' if kind == 'box' else 'obrys tvarů'}), deska {_f(board_w)} x {_f(board_h)} mm",
+          "; nula = " + ("levý dolní roh desky" if origin == "bl" else "levý horní roh desky"),
+          "G21", "G90", "M5")
+    _frame_lines(G, frame_points(parts, placements, kind), power, speed, s_max, passes)
+    G.add("G0 X0 Y0", "M2")
     with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines) + "\n")
-    stats["lines"] = len(lines)
-    return stats
+        f.write("\n".join(G.lines) + "\n")
+
+
+def gcode(path, parts, placements, board_w, board_h, prof, *, do_engrave=True, do_cut=True,
+          pause=False, origin="bl", order="all", tabs=0, tab_w=0.5, frame=None):
+    """prof: dict – engrave_speed, engrave_power, lines_per_mm, cut_speed, cut_power, cut_passes,
+    s_max, air, kerf.  origin 'bl' = nula v levém dolním rohu desky, 'tl' = levý horní.
+    order 'all' = nejdřív všechen gravír, pak řez; 'part' = po kusech (gravír a hned řez).
+    frame = None nebo dict(kind, power, speed) – rám na začátek a pauza M0."""
+    smax = float(prof.get("s_max", 1000))
+    kerf = float(prof.get("kerf", 0) or 0)
+    G = _G(board_h, origin)
+    G.add(f"; LaserNest – deska {_f(board_w)} x {_f(board_h)} mm, {len(placements)} dílů",
+          f"; profil: {prof.get('name', '')}",
+          "; nula = " + ("levý dolní roh desky" if origin == "bl" else "levý horní roh desky (Y do minusu)"),
+          f"; pořadí: {'po dílech' if order == 'part' else 'nejdřív gravír, pak řez'}"
+          + (f", kerf {_f(kerf)} mm" if kerf else "") + (f", můstky {tabs}× {_f(tab_w)} mm" if tabs else ""),
+          "G21", "G90", "M5")
+    if prof.get("air"):
+        G.add("M8")
+    if frame:
+        _frame_lines(G, frame_points(parts, placements, frame.get("kind", "box")),
+                     frame.get("power", 0), frame.get("speed", 3000), smax)
+        G.add("; ---- PAUZA po rámu – zkontroluj polohu desky a pokračuj (Resume/Cycle start) ----", "M0")
+    res = float(prof.get("lines_per_mm", 10))
+    Se = _f(smax * float(prof["engrave_power"]) / 100)
+    Fe = _f(float(prof["engrave_speed"]))
+    Sc = _f(smax * float(prof["cut_power"]) / 100)
+    Fc = _f(float(prof["cut_speed"]))
+    passes = max(1, int(prof.get("cut_passes", 1)))
+    gap_px = int(3 * res)               # mezery do 3 mm projíždí G1 S0 (plynulejší)
+    W, H = round(board_w * res), round(board_h * res)
+    has_eng = do_engrave and any(parts[p.part].engrave_img is not None for p in placements)
+    n_cut = 0
+    if order == "part":
+        for pl in _nn_order(parts, placements):
+            G.add(f"; ---- DÍL: {parts[pl.part].name} ----")
+            if has_eng:
+                t = _tile(parts, pl, res, W, H)
+                if t is not None:
+                    x0, y0, tile = t
+                    G.add("; gravír", "M4 S0")
+                    G.engrave(np.asarray(tile) < 128, res, x0, y0, Se, Fe, gap_px)
+                    G.add("M5")
+            if do_cut:
+                paths = part_cut_paths(parts, pl, kerf, tabs, tab_w)
+                n_cut += len(paths)
+                G.add("; řez", "M3 S0")
+                G.cut(paths, Sc, Fc, passes)
+                G.add("M5")
+    else:
+        if has_eng:
+            a = np.asarray(board_raster(parts, placements, board_w, board_h, res)) < 128
+            G.add("; ---- GRAVÍR ----", "M4 S0")
+            G.engrave(a, res, 0, 0, Se, Fe, gap_px)
+            G.add("M5")
+        if do_cut:
+            if pause and has_eng:
+                G.add("; ---- PAUZA před řezem (pokračuj tlačítkem Resume/Cycle start) ----", "M0")
+            paths = board_cut_paths(parts, placements, kerf=kerf, tabs=tabs, tab_w=tab_w)
+            n_cut = len(paths)
+            G.add("; ---- ŘEZ ----", "M3 S0")
+            G.cut(paths, Sc, Fc, passes)
+            G.add("M5")
+    if prof.get("air"):
+        G.add("M9")
+    G.add("G0 X0 Y0", "M2")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(G.lines) + "\n")
+    return {"engrave_rows": G.rows, "cut_paths": n_cut, "lines": len(G.lines)}
 
 
 def estimate_time(path):

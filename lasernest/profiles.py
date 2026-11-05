@@ -7,9 +7,9 @@ import sys
 
 DEFAULTS = [
     {"name": "Překližka 3 mm – 10 W", "engrave_speed": 3500, "engrave_power": 65, "lines_per_mm": 10,
-     "cut_speed": 350, "cut_power": 100, "cut_passes": 2, "s_max": 1000, "air": True},
+     "cut_speed": 350, "cut_power": 100, "cut_passes": 2, "s_max": 1000, "air": True, "kerf": 0.0},
     {"name": "Překližka 3 mm – 5 W", "engrave_speed": 2500, "engrave_power": 75, "lines_per_mm": 10,
-     "cut_speed": 200, "cut_power": 100, "cut_passes": 4, "s_max": 1000, "air": True},
+     "cut_speed": 200, "cut_power": 100, "cut_passes": 4, "s_max": 1000, "air": True, "kerf": 0.0},
 ]
 
 FIELDS = [  # klíč, popisek, typ, min, max
@@ -19,6 +19,7 @@ FIELDS = [  # klíč, popisek, typ, min, max
     ("cut_speed", "Řez – rychlost [mm/min]", int, 10, 30000),
     ("cut_power", "Řez – výkon [%]", float, 0, 100),
     ("cut_passes", "Řez – počet průchodů", int, 1, 50),
+    ("kerf", "Řez – kerf, šířka řezu [mm] (0 = vypnuto)", float, 0, 2),
     ("s_max", "Max. S (GRBL $30)", int, 1, 100000),
     ("air", "Air assist (M8/M9)", bool, 0, 1),
 ]

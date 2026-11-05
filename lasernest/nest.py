@@ -25,18 +25,41 @@ class Placement:
     angle: float       # stupně (stejná konvence jako shapely / Qt: x' = x cos - y sin)
     tx: float          # mm
     ty: float
+    scale: float = 1.0     # měřítko tohoto kusu (násobí se měřítkem objektu part.scale)
+    locked: bool = False   # zamčený kus – rozmísťování ho nechá na místě
 
 
-def transform_geom(g, angle, tx, ty):
+def part_scale(part):
+    return float(getattr(part, "scale", 1.0) or 1.0)
+
+
+def eff_scale(parts, pl):
+    """Výsledné měřítko kusu = měřítko objektu × měřítko kusu."""
+    return part_scale(parts[pl.part]) * float(pl.scale or 1.0)
+
+
+def transform_geom(g, angle, tx, ty, s=1.0):
+    """board = R(angle) · (s · p) + t"""
+    if s != 1.0:
+        g = affinity.scale(g, s, s, origin=(0, 0))
     if angle:
         g = affinity.rotate(g, angle, origin=(0, 0))
     return affinity.translate(g, tx, ty)
 
 
-def matrix(angle, tx, ty):
+def place_geom(parts, pl, g=None):
+    p = parts[pl.part]
+    return transform_geom(p.outline if g is None else g, pl.angle, pl.tx, pl.ty, eff_scale(parts, pl))
+
+
+def matrix(angle, tx, ty, s=1.0):
     a = math.radians(angle)
-    c, s = math.cos(a), math.sin(a)
-    return (c, -s, tx, s, c, ty)
+    c, sn = math.cos(a), math.sin(a)
+    return (c * s, -sn * s, tx, sn * s, c * s, ty)
+
+
+def place_matrix(parts, pl):
+    return matrix(pl.angle, pl.tx, pl.ty, eff_scale(parts, pl))
 
 
 def apply(m, x, y):
@@ -84,7 +107,9 @@ class Nester:
 
     def _prep(self, part, angle):
         r = self.st.res
-        poly = part.outline.buffer(self.st.gap / 2, quad_segs=8)
+        sc = part_scale(part)
+        base = affinity.scale(part.outline, sc, sc, origin=(0, 0)) if sc != 1.0 else part.outline
+        poly = base.buffer(self.st.gap / 2, quad_segs=8)
         poly = affinity.rotate(poly, angle, origin=(0, 0)) if angle else poly
         minx, miny, maxx, maxy = poly.bounds
         w = int(math.ceil((maxx - minx) / r)) + 3
@@ -118,8 +143,7 @@ class Nester:
         im = Image.fromarray((self._empty() * 255).astype(np.uint8))
         d = ImageDraw.Draw(im)
         for pl in placements:
-            g = transform_geom(self.parts[pl.part].outline.buffer(self.st.gap / 2, quad_segs=8),
-                               pl.angle, pl.tx, pl.ty)
+            g = place_geom(self.parts, pl).buffer(self.st.gap / 2, quad_segs=8)
             d.polygon([(x / r, y / r) for x, y in g.exterior.coords], fill=255)
         im = im.filter(ImageFilter.MaxFilter(3))
         return (np.asarray(im) > 0).astype(np.float32)
@@ -161,8 +185,11 @@ class Nester:
         ty = i * r - s.miny
         return Placement(idx, s.angle, tx, ty)
 
-    def run_order(self, order, fill_ids):
-        occ = self._empty()
+    def _area(self, i):
+        return self.parts[i].area * part_scale(self.parts[i]) ** 2
+
+    def run_order(self, order, fill_ids, base_occ=None):
+        occ = self._empty() if base_occ is None else base_occ.copy()
         placed, missing = [], []
         occ_fft = np.fft.rfft2(occ)
         for idx in order:
@@ -192,14 +219,21 @@ class Nester:
                 k += 1
         return placed, missing, occ
 
-    def run(self):
+    def run(self, locked=()):
+        """locked = již umístěné (zamčené) kusy – zůstanou, doskládá se jen zbytek.
+        Vrací (nová umístění bez zamčených, chybějící)."""
         rnd = random.Random(self.st.seed)
+        locked = list(locked)
+        base_occ = self.occ_from(locked) if locked else None
+        have = {}
+        for pl in locked:
+            have[pl.part] = have.get(pl.part, 0) + 1
         req = []
         for i, p in enumerate(self.parts):
-            req += [i] * int(p.count)
+            req += [i] * max(0, int(p.count) - have.get(i, 0))
         fill_ids = [i for i, p in enumerate(self.parts) if p.fill]
         orders = []
-        by_area = sorted(req, key=lambda i: -self.parts[i].area)
+        by_area = sorted(req, key=lambda i: -self._area(i))
         orders.append(by_area)
         # prokládané pořadí (velký, malý, velký…)
         groups = {}
@@ -215,29 +249,30 @@ class Nester:
         for _ in range(max(0, self.st.trials - 2)):
             o = by_area[:]
             # zamíchej jen sousední velikosti – velké díly pořád spíš dřív
-            o = sorted(o, key=lambda i: -self.parts[i].area * rnd.uniform(0.6, 1.4))
+            o = sorted(o, key=lambda i: -self._area(i) * rnd.uniform(0.6, 1.4))
             orders.append(o)
         best = None
         for t, o in enumerate(orders):
             if self.cancel():
                 break
             self.progress(t, len(orders))
-            placed, missing, occ = self.run_order(o, fill_ids)
+            placed, missing, occ = self.run_order(o, fill_ids, base_occ)
             ys = [self._bottom(p) for p in placed] or [0]
             key = (len(placed), -len(missing), -max(ys))
             if best is None or key > best[0]:
                 best = (key, placed, missing)
         self.progress(len(orders), len(orders))
+        if best is None:
+            return [], []
         _, placed, missing = best
         return placed, missing
 
     def _bottom(self, pl):
-        g = transform_geom(self.parts[pl.part].outline, pl.angle, pl.tx, pl.ty)
-        return g.bounds[3]
+        return place_geom(self.parts, pl).bounds[3]
 
 
 def placed_outlines(parts, placements):
-    return [transform_geom(parts[p.part].outline, p.angle, p.tx, p.ty) for p in placements]
+    return [place_geom(parts, p) for p in placements]
 
 
 def check(parts, placements, st: NestSettings):
@@ -259,5 +294,5 @@ def check(parts, placements, st: NestSettings):
 
 
 def utilization(parts, placements, st: NestSettings):
-    a = sum(parts[p.part].area for p in placements)
+    a = sum(parts[p.part].area * eff_scale(parts, p) ** 2 for p in placements)
     return a / (st.board_w * st.board_h)

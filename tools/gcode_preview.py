@@ -1,4 +1,5 @@
 """Vykreslí G-code (pálící pohyby) do PNG – pro kontrolu exportu.
+Hnědá = gravír (M4), červená = řez (M3), modrá = rám.
 Použití: python tools/gcode_preview.py soubor.gcode vystup.png [px_na_mm]"""
 import sys
 from PIL import Image, ImageDraw
@@ -14,14 +15,17 @@ def main(src, dst, res=4.0):
     for ln in open(src, encoding="utf-8"):
         ln = ln.strip()
         if ln.startswith(";"):
-            if "GRAVÍR" in ln: section = "e"
-            if "ŘEZ" in ln: section = "c"
+            if "RÁM" in ln: section = "f"
             continue
         p = ln.split()
         if not p:
             continue
-        if p[0] in ("M3", "M4"): laser = True
+        if p[0] in ("M3", "M4"):
+            laser = True
+            if section != "f":
+                section = "e" if p[0] == "M4" else "c"
         if p[0] == "M5": laser = False
+        if p[0] == "M0" and section == "f": section = "?"
         if p[0] not in ("G0", "G1"):
             continue
         nx, ny = x, y
@@ -38,7 +42,7 @@ def main(src, dst, res=4.0):
     im = Image.new("RGB", (int(W * res), int(H * res)), "white")
     d = ImageDraw.Draw(im)
     for sec, x0, y0, x1, y1 in moves:
-        col = (60, 30, 10) if sec == "e" else (230, 0, 0)
+        col = {"e": (60, 30, 10), "f": (0, 120, 255)}.get(sec, (230, 0, 0))
         d.line([(x0 * res, (H - y0) * res), (x1 * res, (H - y1) * res)], fill=col, width=1)
     im.save(dst)
     print(f"{len(moves)} pálících pohybů, rozsah {max(xs):.1f} x {max(ys):.1f} mm")

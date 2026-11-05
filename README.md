@@ -34,10 +34,15 @@ export do G-code, SVG a PNG pro LaserGRBL a LightBurn – jeden program, bez ins
 |---|---|
 | **Deska** | Rozměr, okraj od kraje, mezera mezi díly, kontrola kolizí a přesahů |
 | **Objekty** | Řez (SVG) + gravír (PNG/JPG/SVG), nebo jen gravír; automatické párování souborů a rozpoznání řezu/gravíru podle obsahu; drag & drop |
-| **Rozmístění** | Podle skutečného obrysu, otáčení po 180° / 90° / 45° / 15°, víc pokusů, „Vyplnit zbytek desky“, ruční posun / otáčení / duplikace, „+1 na desku“ |
-| **Export** | G-code (gravír M4 → řez M3, volitelná pauza M0), PNG + SVG pro LaserGRBL, barevné SVG pro LightBurn / Inkscape |
-| **Optimalizace** | Řez nejdřív otvory, pak obrys; řazení dílů podle nejkratší cesty; gravír po souvislých ostrůvcích bez přejezdů přes desku; odhad času |
-| **Profily** | Rychlost, výkon, hustota řádků, průchody, max. S (`$30`), air assist – ukládají se a pamatují |
+| **Rozmístění** | Podle skutečného obrysu, otáčení po 180° / 90° / 45° / 15°, víc pokusů, „Vyplnit zbytek desky“, **zamčené díly zůstanou a doskládá se jen zbytek**, „+1 na desku“ |
+| **Měřítko** | Pro všechny kusy objektu (sloupec v tabulce, nebo rozměr v mm) i pro jednotlivé kusy na desce (`+` / `−`, Ctrl+T s přesným úhlem); vždy rovnoměrné, s upozorněním na malé otvory a zubatý gravír |
+| **Ruční úpravy** | Posun myší i šipkami (1 / 10 / 0,1 mm), otáčení, duplikace, zamykání, **Zpět / Znovu** (Ctrl+Z / Ctrl+Y) |
+| **Úprava gravíru** | Kliknutím smažeš část gravíru (tečku, nápis…) u všech kusů objektu; jde vrátit |
+| **Export** | G-code (gravír M4 → řez M3), pořadí *nejdřív gravír* nebo *po dílech*, volitelná pauza M0; PNG + SVG pro LaserGRBL; barevné SVG pro LightBurn / Inkscape |
+| **Rám (framing)** | Samostatný soubor nebo začátek G-code + pauza; obdélník nebo obrys tvarů; nastavitelný výkon (0 % = laser vypnutý) a rychlost |
+| **Řez** | Můstky (počet a šířka) proti vypadnutí dílů, kompenzace šířky řezu (kerf) z profilu; nejdřív otvory, pak obrys |
+| **Optimalizace** | Řazení dílů podle nejkratší cesty; gravír po souvislých ostrůvcích bez přejezdů přes desku; odhad času |
+| **Profily** | Rychlost, výkon, hustota řádků, průchody, kerf, max. S (`$30`), air assist – ukládají se a pamatují |
 | **Projekty** | Uložení a otevření celé desky (`.lnest`) |
 
 ![náhled](docs/screenshot.png)
@@ -62,11 +67,27 @@ Stahuj jen odtud – jiné „download“ weby často přibalují reklamy nebo m
    `něco_2_rez.svg` + `něco_1_gravir.png`, druhý soubor se doplní sám.
    Soubory jde také přetáhnout myší na okno. Stačí i **jen obrázek** (JPG/PNG)
    bez řezu – zadej jeho šířku v mm a díl se jen vygravíruje.
-3. Zadej **počet** kusů. Zatržení **Vyplnit** doplní objekt do zbytku desky.
-4. **▶ Rozmístit.** Pak lze díly ručně posouvat (myš), otáčet (`R`, `Shift+R`, `T`),
-   mazat (`Del`) a duplikovat (`Ctrl+D`). Kolize se zobrazí červeně.
-   Tlačítko **+1 na desku** přidá jeden kus vybraného objektu na volné místo.
-5. **Export…**
+3. Zadej **počet** kusů a případně **měřítko** (sloupec *Měřítko*, nebo dvojklik na
+   *Rozměr* a zadat šířku/výšku v mm). Zatržení **Vyplnit** doplní objekt do zbytku desky.
+4. **▶ Rozmístit.** Pak lze díly ručně doladit (viz klávesy níže). Kolize se zobrazí
+   červeně. Díly, které chceš nechat, **zamkni (`L`)** – další *Rozmístit* je nechá
+   na místě a doskládá jen zbytek. **+1 na desku** přidá jeden kus na volné místo.
+5. Volitelně **✎ Upravit gravír (`E`)** – klikni na část gravíru, kterou nechceš pálit.
+6. **Export…** – formáty, pořadí, můstky a rám.
+
+### Ovládání
+
+| Akce | Klávesa / myš |
+|---|---|
+| Posun dílu | tažení myší, **šipky** 1 mm, **Shift+šipky** 10 mm, **Alt+šipky** 0,1 mm |
+| Otočit o 90° / o krok | `R`, `Shift+R` / `T` |
+| Měřítko kusu ±5 % | `+` / `−` |
+| Přesné měřítko a úhel | `Ctrl+T` (nebo pravé tlačítko → Transformace…) |
+| Zamknout / odemknout | `L` |
+| Úprava gravíru (mazání kliknutím) | `E` |
+| Zpět / znovu | `Ctrl+Z` / `Ctrl+Y` |
+| Duplikovat / smazat | `Ctrl+D` / `Del` |
+| Zoom / celá deska | kolečko myši / `F` |
 
 ### Co se exportuje
 
@@ -74,7 +95,14 @@ Stahuj jen odtud – jiné „download“ weby často přibalují reklamy nebo m
 |---|---|
 | `deska.svg` | Jedno SVG s barvami: **černá výplň = gravír**, **červená čára = řez** – pro **LightBurn / Inkscape**. ⚠ **Ne pro LaserGRBL** (výplně neumí, gravír by jen obkreslil obrysy) |
 | `deska_1_gravir.png` + `deska_2_rez.svg` | Pro **LaserGRBL** – obojí má plátno přesně rozměr desky, načítej s offsetem 0/0 |
-| `deska.gcode` | Hotový G-code: gravír (M4) a pak řez (M3) v jednom souboru, nebo zvlášť |
+| `deska.gcode` | Hotový G-code: gravír (M4) a řez (M3) v jednom souboru (nebo zvlášť), pořadí *nejdřív gravír* nebo *po dílech* |
+| `deska_0_ram.gcode` | **Rám** – laser objede oblast úlohy (obdélník nebo obrys tvarů) slabým paprskem nebo s vypnutým laserem |
+
+**Pořadí po dílech** – u každého dílu se nejdřív vygravíruje a hned vyřízne. Hodí se,
+když se deska teplem kroutí nebo se díly po prořezání pohnou.
+**Můstky** – na vnějším obrysu zůstane zadaný počet neprořezaných kousků (např. 3 × 0,5 mm),
+díl drží v desce a pak se jen vylomí. **Kerf** – obrys se posune ven a otvory dovnitř
+o polovinu šířky řezu, aby díly měly přesný rozměr (nastavuje se v profilu laseru).
 
 Řez jde vždy **nejdřív otvory, potom vnější obrys** každého dílu, díly jsou
 seřazené tak, aby hlava zbytečně nejezdila. Gravír se pálí po souvislých
@@ -89,6 +117,8 @@ max. S (GRBL `$30`) a air assist (M8/M9). Profily se ukládají do
 - GRBL musí mít **laser mode `$32=1`**.
 - Nula G-code je **levý dolní roh desky** (nebo levý horní – volba v exportu).
 - Výchozí profily (překližka 3 mm, 5 W / 10 W) jsou orientační – **vždy ověř testem**.
+- **Rám:** u diody bez ukazovátka nastav výkon 0,5–1 % – je vidět jako slabá tečka a nepálí.
+  Vždy s ochrannými brýlemi.
 
 ### Vstupní soubory
 
@@ -120,11 +150,15 @@ max. S (GRBL `$30`) a air assist (M8/M9). Profily se ukládají do
 
 #### A) Hotový G-code (doporučeno)
 
-1. **File → Open File →** `deska.gcode`.
-2. V náhledu zkontroluj, že díly leží uvnitř desky (osa Y roste od spodního
+1. **Rám:** **File → Open File →** `deska_0_ram.gcode` → **▶ Run**. Laser objede
+   oblast úlohy – zkontroluj, že leží na desce. Případně posuň desku nebo nulu a opakuj.
+   (Nebo zapni v exportu „Rám i na začátek G-code“ – laser rám objede, zastaví se
+   a po kontrole pokračuješ tlačítkem **Resume / Cycle start**.)
+2. **File → Open File →** `deska.gcode`.
+3. V náhledu zkontroluj, že díly leží uvnitř desky (osa Y roste od spodního
    okraje – díly nahoře na desce mají velké Y, to je správně). Dlouhé tenké
    čáry jsou jen přejezdy s vypnutým laserem.
-3. **▶ Run.** Laser sám nejdřív vygravíruje vše a pak vyřízne. Při volbě
+4. **▶ Run.** Laser sám vygravíruje a vyřízne (podle zvoleného pořadí). Při volbě
    „Pauza (M0)“ se mezi gravírem a řezem zastaví – pokračuj tlačítkem
    **Resume / Cycle start** (třeba po kontrole gravíru nebo výměně čočky).
 
