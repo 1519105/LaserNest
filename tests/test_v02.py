@@ -225,7 +225,38 @@ def test_svg_scale_transform():
     print("OK – SVG s měřítkem, kerfem a můstky")
 
 
+def test_corners():
+    p = strom()
+    p.count = 3
+    for corner in ("bl", "tl", "br", "tr"):
+        for direction in ("rows", "cols"):
+            st = NestSettings(300, 350, trials=2, corner=corner, direction=direction)
+            pl, miss = Nester([p], st).run()
+            assert len(pl) == 3 and not miss and not check([p], pl, st)
+            g = [place_geom([p], q) for q in pl]
+            x0 = min(b.bounds[0] for b in g); x1 = max(b.bounds[2] for b in g)
+            y0 = min(b.bounds[1] for b in g); y1 = max(b.bounds[3] for b in g)
+            # díly se drží u zvoleného rohu (osa Y desky jde dolů: "b" = velké y)
+            assert (y1 > 340) if corner[0] == "b" else (y0 < 10), (corner, direction, y0, y1)
+            assert (x0 < 10) if corner[1] == "l" else (x1 > 290), (corner, direction, x0, x1)
+            if direction == "rows":
+                assert y1 - y0 < 120, (corner, "řádek", y1 - y0)       # 3 stromky v jednom řádku
+            else:
+                assert x1 - x0 < 120, (corner, "sloupec", x1 - x0)     # 3 stromky v jednom sloupci
+    # G-code s nulou vlevo dole začíná u dílu v levém dolním rohu
+    ps = [sobik()]
+    pls = [Placement(0, 0, 10, 10), Placement(0, 0, 10, 250), Placement(0, 0, 200, 10)]
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "o.gcode")
+        E.gcode(f, ps, pls, 300, 350, PROF, origin="bl")
+        first = next(l for l in open(f, encoding="utf-8") if l.startswith("G0 X"))
+        y = float(first.split("Y")[1])
+        assert y < 100, first                                       # stroj: Y od spodního okraje
+    print("OK – výchozí roh a směr plnění")
+
+
 if __name__ == "__main__":
+    test_corners()
     test_scale_raster_and_geometry()
     test_nest_with_scale()
     test_lock_and_rest()

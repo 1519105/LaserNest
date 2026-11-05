@@ -76,6 +76,8 @@ class NestSettings:
     res: float = 0.5              # mm na buňku rastru
     trials: int = 8
     seed: int = 1
+    corner: str = "bl"            # roh, od kterého se plní: bl / tl / br / tr (b = dole, l = vlevo)
+    direction: str = "rows"       # "rows" = po řádcích, "cols" = po sloupcích
 
 
 def rotations(step):
@@ -166,9 +168,21 @@ class Nester:
             free = corr[:vh, :vw] < 0.5
             if not free.any():
                 continue
-            # skóre: spodní hrana dílu co nejvýš (osa Y dolů), pak co nejvíc vlevo
-            bottom = (np.arange(vh)[:, None] + s.h).astype(np.float32)
-            sc = np.where(free, bottom + np.arange(vw, dtype=np.float32)[None, :] * self.XW, np.inf)
+            # skóre: vzdálená hrana dílu co nejblíž výchozímu rohu v hlavním směru,
+            # pak bližší hrana co nejblíž ve vedlejším směru
+            I = np.arange(vh, dtype=np.float32)[:, None]
+            J = np.arange(vw, dtype=np.float32)[None, :]
+            top = self.st.corner[0] == "t"
+            left = self.st.corner[1] == "l"
+            v_far = (I + s.h) if top else (self.H - I)
+            v_near = I if top else (self.H - I - s.h)
+            h_far = (J + s.w) if left else (self.W - J)
+            h_near = J if left else (self.W - J - s.w)
+            if self.st.direction == "cols":
+                score = h_far + v_near * self.XW
+            else:
+                score = v_far + h_near * self.XW
+            sc = np.where(free, score, np.inf)
             k = int(np.argmin(sc))
             ii, jj = divmod(k, vw)
             score = float(sc[ii, jj])
@@ -257,7 +271,7 @@ class Nester:
                 break
             self.progress(t, len(orders))
             placed, missing, occ = self.run_order(o, fill_ids, base_occ)
-            ys = [self._bottom(p) for p in placed] or [0]
+            ys = [self._extent(p) for p in placed] or [0]
             key = (len(placed), -len(missing), -max(ys))
             if best is None or key > best[0]:
                 best = (key, placed, missing)
@@ -267,8 +281,12 @@ class Nester:
         _, placed, missing = best
         return placed, missing
 
-    def _bottom(self, pl):
-        return place_geom(self.parts, pl).bounds[3]
+    def _extent(self, pl):
+        """Jak daleko od výchozího rohu díl sahá (v hlavním směru plnění) – menší = kompaktnější."""
+        x0, y0, x1, y1 = place_geom(self.parts, pl).bounds
+        if self.st.direction == "cols":
+            return x1 if self.st.corner[1] == "l" else self.st.board_w - x0
+        return y1 if self.st.corner[0] == "t" else self.st.board_h - y0
 
 
 def placed_outlines(parts, placements):

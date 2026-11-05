@@ -208,9 +208,9 @@ def part_cut_paths(parts, pl, kerf=0.0, tabs=0, tab_w=0.5):
     return out
 
 
-def board_cut_paths(parts, placements, optimize=True, kerf=0.0, tabs=0, tab_w=0.5):
-    """Řezné cesty celé desky [(pts, closed)] – po kusech (nejbližší soused)."""
-    order = _nn_order(parts, placements) if optimize else placements
+def board_cut_paths(parts, placements, optimize=True, kerf=0.0, tabs=0, tab_w=0.5, start=(0.0, 0.0)):
+    """Řezné cesty celé desky [(pts, closed)] – po kusech (nejbližší soused od bodu start)."""
+    order = _nn_order(parts, placements, start) if optimize else placements
     out = []
     for pl in order:
         out += part_cut_paths(parts, pl, kerf, tabs, tab_w)
@@ -298,7 +298,8 @@ class _G:
     def __init__(self, board_h, origin):
         self.lines = []
         self.board_h, self.origin = board_h, origin
-        self.cur = (0.0, 0.0)          # poslední pozice v mm desky
+        # poslední pozice v mm desky – začíná v nule laseru
+        self.cur = (0.0, board_h) if origin == "bl" else (0.0, 0.0)
         self.rows = 0
 
     def Y(self, y):
@@ -422,7 +423,7 @@ def gcode(path, parts, placements, board_w, board_h, prof, *, do_engrave=True, d
     has_eng = do_engrave and any(parts[p.part].engrave_img is not None for p in placements)
     n_cut = 0
     if order == "part":
-        for pl in _nn_order(parts, placements):
+        for pl in _nn_order(parts, placements, G.cur):
             G.add(f"; ---- DÍL: {parts[pl.part].name} ----")
             if has_eng:
                 t = _tile(parts, pl, res, W, H)
@@ -446,7 +447,7 @@ def gcode(path, parts, placements, board_w, board_h, prof, *, do_engrave=True, d
         if do_cut:
             if pause and has_eng:
                 G.add("; ---- PAUZA před řezem (pokračuj tlačítkem Resume/Cycle start) ----", "M0")
-            paths = board_cut_paths(parts, placements, kerf=kerf, tabs=tabs, tab_w=tab_w)
+            paths = board_cut_paths(parts, placements, kerf=kerf, tabs=tabs, tab_w=tab_w, start=G.cur)
             n_cut = len(paths)
             G.add("; ---- ŘEZ ----", "M3 S0")
             G.cut(paths, Sc, Fc, passes)

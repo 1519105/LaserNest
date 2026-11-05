@@ -29,6 +29,9 @@ from .part import file_role, guess_pair, load_part, part_name
 
 ROTS = [("Bez otáčení", 0), ("Po 180°", 180), ("Po 90°", 90), ("Po 45°", 45), ("Po 15°", 15)]
 PREC = [("Normální (0,5 mm)", 0.5), ("Rychlá (1 mm)", 1.0), ("Jemná (0,25 mm)", 0.25)]
+CORNERS = [("Levý dolní roh (nula laseru)", "bl"), ("Levý horní roh", "tl"),
+           ("Pravý dolní roh", "br"), ("Pravý horní roh", "tr")]
+DIRS = [("Po řádcích", "rows"), ("Po sloupcích", "cols")]
 
 
 def pil_to_qimage(img):
@@ -618,6 +621,19 @@ class MainWindow(QMainWindow):
         f.addRow("Přesnost:", self.prec)
         self.trials = QSpinBox(); self.trials.setRange(1, 100); self.trials.setValue(self.settings.get("trials", 8))
         f.addRow("Počet pokusů:", self.trials)
+        self.corner = QComboBox()
+        for t, v in CORNERS:
+            self.corner.addItem(t, v)
+        self.corner.setCurrentIndex(max(0, [v for _, v in CORNERS].index(self.settings.get("corner", "bl"))))
+        self.direction = QComboBox()
+        for t, v in DIRS:
+            self.direction.addItem(t, v)
+        self.direction.setCurrentIndex(1 if self.settings.get("direction", "rows") == "cols" else 0)
+        self.corner.setToolTip("Odkud se deska začne zaplňovat – u zbytků desek dej roh, kde máš nulu laseru.")
+        self.direction.setToolTip("Po sloupcích se hodí pro úzké a vysoké zbytky desek.")
+        row = QHBoxLayout(); row.addWidget(self.corner, 2); row.addWidget(self.direction, 1)
+        f.addRow("Začít plnit od:", row)
+        self.corner.currentIndexChanged.connect(lambda *_: self.update_board())
         for w in (self.bw, self.bh, self.margin):
             w.valueChanged.connect(self.update_board)
         self.gap.valueChanged.connect(lambda *_: self._check_timer.start(150))
@@ -765,7 +781,8 @@ class MainWindow(QMainWindow):
     def nest_settings(self):
         return NestSettings(board_w=self.bw.value(), board_h=self.bh.value(), margin=self.margin.value(),
                             gap=self.gap.value(), rot_step=self.rot_step(), res=self.prec.currentData(),
-                            trials=self.trials.value())
+                            trials=self.trials.value(), corner=self.corner.currentData(),
+                            direction=self.direction.currentData())
 
     def _fill_profiles(self, idx=0):
         self.prof.blockSignals(True)
@@ -791,6 +808,24 @@ class MainWindow(QMainWindow):
             self.margin_item.setZValue(-9)
             self.scene.addItem(self.margin_item)
         self.board_item.setRect(0, 0, w, h)
+        # značka rohu, od kterého se plní
+        if getattr(self, "corner_item", None) is None:
+            from PySide6.QtWidgets import QGraphicsPolygonItem
+            from PySide6.QtGui import QPolygonF
+            self.corner_item = QGraphicsPolygonItem()
+            self.corner_item.setBrush(QColor(40, 170, 80, 200))
+            self.corner_item.setPen(QPen(Qt.NoPen))
+            self.corner_item.setZValue(-8)
+            self.corner_item.setToolTip("Odsud se deska začne zaplňovat")
+            self.scene.addItem(self.corner_item)
+            self._QPolygonF = QPolygonF
+        c = self.corner.currentData() if hasattr(self, "corner") else "bl"
+        k = max(6.0, min(w, h) * 0.04)
+        x = 0.0 if c[1] == "l" else w
+        y = 0.0 if c[0] == "t" else h
+        sx = 1 if c[1] == "l" else -1
+        sy = 1 if c[0] == "t" else -1
+        self.corner_item.setPolygon(self._QPolygonF([QPointF(x, y), QPointF(x + sx * k, y), QPointF(x, y + sy * k)]))
         self.margin_item.setRect(m, m, max(0, w - 2 * m), max(0, h - 2 * m))
         self.scene.setSceneRect(QRectF(-5, -5, w + 10, h + 10))
         self.view.fit()
@@ -1335,6 +1370,10 @@ class MainWindow(QMainWindow):
         b = data.get("board", {})
         self.bw.setValue(b.get("board_w", 300)); self.bh.setValue(b.get("board_h", 350))
         self.margin.setValue(b.get("margin", 3)); self.gap.setValue(b.get("gap", 3))
+        if b.get("corner") in [v for _, v in CORNERS]:
+            self.corner.setCurrentIndex([v for _, v in CORNERS].index(b["corner"]))
+        if b.get("direction") in ("rows", "cols"):
+            self.direction.setCurrentIndex(0 if b["direction"] == "rows" else 1)
         base = os.path.dirname(path)
         for p in data.get("parts", []):
             cut = p.get("cut") or ""
@@ -1391,6 +1430,7 @@ class MainWindow(QMainWindow):
         s = dict(self.settings)
         s.update(board_w=self.bw.value(), board_h=self.bh.value(), margin=self.margin.value(), gap=self.gap.value(),
                  rot=self.rot.currentIndex(), prec=self.prec.currentIndex(), trials=self.trials.value(),
+                 corner=self.corner.currentData(), direction=self.direction.currentData(),
                  profile=self.prof.currentIndex(), last_dir=self.last_dir)
         return s
 

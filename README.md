@@ -34,7 +34,7 @@ export do G-code, SVG a PNG pro LaserGRBL a LightBurn – jeden program, bez ins
 |---|---|
 | **Deska** | Rozměr, okraj od kraje, mezera mezi díly, kontrola kolizí a přesahů |
 | **Objekty** | Řez (SVG) + gravír (PNG/JPG/SVG), nebo jen gravír; automatické párování souborů a rozpoznání řezu/gravíru podle obsahu; drag & drop |
-| **Rozmístění** | Podle skutečného obrysu, otáčení po 180° / 90° / 45° / 15°, víc pokusů, „Vyplnit zbytek desky“, **zamčené díly zůstanou a doskládá se jen zbytek**, „+1 na desku“ |
+| **Rozmístění** | Podle skutečného obrysu, otáčení po 180° / 90° / 45° / 15°, volitelný výchozí roh a směr plnění (řádky / sloupce), víc pokusů, „Vyplnit zbytek desky“, **zamčené díly zůstanou a doskládá se jen zbytek**, „+1 na desku“ |
 | **Měřítko** | Pro všechny kusy objektu (sloupec v tabulce, nebo rozměr v mm) i pro jednotlivé kusy na desce (`+` / `−`, Ctrl+T s přesným úhlem); vždy rovnoměrné, s upozorněním na malé otvory a zubatý gravír |
 | **Ruční úpravy** | Posun myší i šipkami (1 / 10 / 0,1 mm), otáčení, duplikace, zamykání, **Zpět / Znovu** (Ctrl+Z / Ctrl+Y) |
 | **Úprava gravíru** | Kliknutím smažeš část gravíru (tečku, nápis…) u všech kusů objektu; jde vrátit |
@@ -63,6 +63,9 @@ Stahuj jen odtud – jiné „download“ weby často přibalují reklamy nebo m
 ## Postup
 
 1. **Deska** – rozměr (např. 300 × 350 mm), okraj od kraje a mezera mezi díly.
+   **Začít plnit od** – roh, odkud se deska zaplňuje (výchozí levý dolní = nula laseru,
+   zelená značka na desce), a směr **po řádcích / po sloupcích** (sloupce se hodí na
+   úzké zbytky desek).
 2. **Přidat…** – soubor řezu (SVG) a gravíru (PNG nebo SVG). Pokud se jmenují
    `něco_2_rez.svg` + `něco_1_gravir.png`, druhý soubor se doplní sám.
    Soubory jde také přetáhnout myší na okno. Stačí i **jen obrázek** (JPG/PNG)
