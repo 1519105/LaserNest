@@ -10,6 +10,7 @@ from PIL import Image, ImageChops
 from shapely.geometry import LineString, Polygon
 from shapely.ops import unary_union
 
+from .i18n import T
 from .nest import apply, eff_scale, place_geom, place_matrix
 
 
@@ -367,7 +368,7 @@ def _frame_lines(G, pts, power, speed, smax, passes=1):
     S = _f(smax * float(power) / 100)
     F = _f(float(speed))
     on = float(power) > 0
-    G.add(f"; ---- RÁM ({'laser ' + _f(float(power)) + ' %' if on else 'laser vypnutý'}) ----",
+    G.add(T("; ---- RÁM (laser {p} %) ----", p=_f(float(power))) if on else T("; ---- RÁM (laser vypnutý) ----"),
           "M3 S0" if on else "M5")
     for _ in range(max(1, int(passes))):
         x, y = pts[0]
@@ -382,8 +383,9 @@ def frame_gcode(path, parts, placements, board_w, board_h, *, kind="box", power=
                 s_max=1000, origin="bl", passes=1):
     """Samostatný soubor rámu – laser objede oblast úlohy (při výkonu 0 jen jede, nepálí)."""
     G = _G(board_h, origin)
-    G.add(f"; LaserNest – rám ({'obdélník' if kind == 'box' else 'obrys tvarů'}), deska {_f(board_w)} x {_f(board_h)} mm",
-          "; nula = " + ("levý dolní roh desky" if origin == "bl" else "levý horní roh desky"),
+    G.add(T("; LaserNest – rám (obdélník), deska {w} x {h} mm" if kind == "box" else
+            "; LaserNest – rám (obrys tvarů), deska {w} x {h} mm", w=_f(board_w), h=_f(board_h)),
+          T("; nula = levý dolní roh desky" if origin == "bl" else "; nula = levý horní roh desky"),
           "G21", "G90", "M5")
     _frame_lines(G, frame_points(parts, placements, kind), power, speed, s_max, passes)
     G.add("G0 X0 Y0", "M2")
@@ -400,18 +402,18 @@ def gcode(path, parts, placements, board_w, board_h, prof, *, do_engrave=True, d
     smax = float(prof.get("s_max", 1000))
     kerf = float(prof.get("kerf", 0) or 0)
     G = _G(board_h, origin)
-    G.add(f"; LaserNest – deska {_f(board_w)} x {_f(board_h)} mm, {len(placements)} dílů",
-          f"; profil: {prof.get('name', '')}",
-          "; nula = " + ("levý dolní roh desky" if origin == "bl" else "levý horní roh desky (Y do minusu)"),
-          f"; pořadí: {'po dílech' if order == 'part' else 'nejdřív gravír, pak řez'}"
-          + (f", kerf {_f(kerf)} mm" if kerf else "") + (f", můstky {tabs}× {_f(tab_w)} mm" if tabs else ""),
+    G.add(T("; LaserNest – deska {w} x {h} mm, {n} dílů", w=_f(board_w), h=_f(board_h), n=len(placements)),
+          T("; profil: {name}", name=prof.get("name", "")),
+          T("; nula = levý dolní roh desky" if origin == "bl" else "; nula = levý horní roh desky (Y do minusu)"),
+          T("; pořadí: po dílech" if order == "part" else "; pořadí: nejdřív gravír, pak řez")
+          + (f", kerf {_f(kerf)} mm" if kerf else "") + (T(", můstky {n}× {w} mm", n=tabs, w=_f(tab_w)) if tabs else ""),
           "G21", "G90", "M5")
     if prof.get("air"):
         G.add("M8")
     if frame:
         _frame_lines(G, frame_points(parts, placements, frame.get("kind", "box")),
                      frame.get("power", 0), frame.get("speed", 3000), smax)
-        G.add("; ---- PAUZA po rámu – zkontroluj polohu desky a pokračuj (Resume/Cycle start) ----", "M0")
+        G.add(T("; ---- PAUZA po rámu – zkontroluj polohu desky a pokračuj (Resume/Cycle start) ----"), "M0")
     res = float(prof.get("lines_per_mm", 10))
     Se = _f(smax * float(prof["engrave_power"]) / 100)
     Fe = _f(float(prof["engrave_speed"]))
@@ -424,32 +426,32 @@ def gcode(path, parts, placements, board_w, board_h, prof, *, do_engrave=True, d
     n_cut = 0
     if order == "part":
         for pl in _nn_order(parts, placements, G.cur):
-            G.add(f"; ---- DÍL: {parts[pl.part].name} ----")
+            G.add(T("; ---- DÍL: {name} ----", name=parts[pl.part].name))
             if has_eng:
                 t = _tile(parts, pl, res, W, H)
                 if t is not None:
                     x0, y0, tile = t
-                    G.add("; gravír", "M4 S0")
+                    G.add(T("; gravír"), "M4 S0")
                     G.engrave(np.asarray(tile) < 128, res, x0, y0, Se, Fe, gap_px)
                     G.add("M5")
             if do_cut:
                 paths = part_cut_paths(parts, pl, kerf, tabs, tab_w)
                 n_cut += len(paths)
-                G.add("; řez", "M3 S0")
+                G.add(T("; řez"), "M3 S0")
                 G.cut(paths, Sc, Fc, passes)
                 G.add("M5")
     else:
         if has_eng:
             a = np.asarray(board_raster(parts, placements, board_w, board_h, res)) < 128
-            G.add("; ---- GRAVÍR ----", "M4 S0")
+            G.add(T("; ---- GRAVÍR ----"), "M4 S0")
             G.engrave(a, res, 0, 0, Se, Fe, gap_px)
             G.add("M5")
         if do_cut:
             if pause and has_eng:
-                G.add("; ---- PAUZA před řezem (pokračuj tlačítkem Resume/Cycle start) ----", "M0")
+                G.add(T("; ---- PAUZA před řezem (pokračuj tlačítkem Resume/Cycle start) ----"), "M0")
             paths = board_cut_paths(parts, placements, kerf=kerf, tabs=tabs, tab_w=tab_w, start=G.cur)
             n_cut = len(paths)
-            G.add("; ---- ŘEZ ----", "M3 S0")
+            G.add(T("; ---- ŘEZ ----"), "M3 S0")
             G.cut(paths, Sc, Fc, passes)
             G.add("M5")
     if prof.get("air"):

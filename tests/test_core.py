@@ -9,6 +9,8 @@ sys.path.insert(0, ROOT)
 
 import numpy as np
 
+from lasernest.i18n import set_lang
+set_lang("cs")      # testy kontrolují české texty
 from lasernest import export as E
 from lasernest.nest import Nester, NestSettings, Placement, check, utilization
 from lasernest.part import load_part
@@ -18,7 +20,7 @@ EX = os.path.join(ROOT, "examples")
 
 
 def test_raster_alignment():
-    p = load_part(os.path.join(EX, "sobik_2_rez.svg"), os.path.join(EX, "sobik_1_gravir.png"))
+    p = load_part(os.path.join(EX, "reindeer_2_cut.svg"), os.path.join(EX, "reindeer_1_engrave.png"))
     src = np.asarray(p.engrave_img) < 128
     sy, sx = np.nonzero(src)
     cx, cy = (sx.mean() + .5) / 10, (sy.mean() + .5) / 10
@@ -32,8 +34,8 @@ def test_raster_alignment():
 
 
 def test_nest_and_export():
-    ps = [load_part(os.path.join(EX, "sobik_2_rez.svg"), os.path.join(EX, "sobik_1_gravir.png")),
-          load_part(os.path.join(EX, "stromecek_2_rez.svg"), os.path.join(EX, "stromecek_1_gravir.png"))]
+    ps = [load_part(os.path.join(EX, "reindeer_2_cut.svg"), os.path.join(EX, "reindeer_1_engrave.png")),
+          load_part(os.path.join(EX, "tree_2_cut.svg"), os.path.join(EX, "tree_1_engrave.png"))]
     ps[0].count, ps[1].count = 4, 4
     ps[1].fill = True
     st = NestSettings(300, 350, trials=3)

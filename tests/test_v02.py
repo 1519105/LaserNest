@@ -11,6 +11,8 @@ sys.path.insert(0, ROOT)
 import numpy as np
 from shapely.geometry import Polygon
 
+from lasernest.i18n import set_lang
+set_lang("cs")      # testy kontrolují české texty
 from lasernest import export as E
 from lasernest.nest import Nester, NestSettings, Placement, check, eff_scale, place_geom, utilization
 from lasernest.part import load_part
@@ -21,11 +23,11 @@ PROF = dict(DEFAULTS[0])
 
 
 def sobik():
-    return load_part(os.path.join(EX, "sobik_2_rez.svg"), os.path.join(EX, "sobik_1_gravir.png"))
+    return load_part(os.path.join(EX, "reindeer_2_cut.svg"), os.path.join(EX, "reindeer_1_engrave.png"))
 
 
 def strom():
-    return load_part(os.path.join(EX, "stromecek_2_rez.svg"), os.path.join(EX, "stromecek_1_gravir.png"))
+    return load_part(os.path.join(EX, "tree_2_cut.svg"), os.path.join(EX, "tree_1_engrave.png"))
 
 
 def parse_burn(path):

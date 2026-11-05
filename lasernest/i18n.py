@@ -1,0 +1,322 @@
+"""Překlady rozhraní. Zdrojové texty jsou česky, T() vrací text v aktuálním jazyce.
+
+Výchozí jazyk je angličtina. Klíč = český text (přesně jak je v kódu), hodnota = anglický.
+Texty s proměnnými používají {jméno} a T(text, jméno=hodnota).
+"""
+from __future__ import annotations
+
+LANGS = [("en", "English"), ("cs", "Čeština")]
+_lang = "en"
+
+
+def set_lang(code):
+    global _lang
+    _lang = code if code in dict(LANGS) else "en"
+
+
+def get_lang():
+    return _lang
+
+
+def T(text, **kw):
+    t = EN.get(text, text) if _lang == "en" else text
+    return t.format(**kw) if kw else t
+
+
+EN = {
+    # --- volby
+    "Bez otáčení": "No rotation",
+    "Po 180°": "By 180°",
+    "Po 90°": "By 90°",
+    "Po 45°": "By 45°",
+    "Po 15°": "By 15°",
+    "Normální (0,5 mm)": "Normal (0.5 mm)",
+    "Rychlá (1 mm)": "Fast (1 mm)",
+    "Jemná (0,25 mm)": "Fine (0.25 mm)",
+    "Levý dolní roh (nula laseru)": "Bottom left (laser zero)",
+    "Levý horní roh": "Top left",
+    "Pravý dolní roh": "Bottom right",
+    "Pravý horní roh": "Top right",
+    "Po řádcích": "In rows",
+    "Po sloupcích": "In columns",
+    # --- kontextové menu desky
+    "Otočit o 90° doprava  (R)": "Rotate 90° clockwise  (R)",
+    "Otočit o 90° doleva  (Shift+R)": "Rotate 90° counter-clockwise  (Shift+R)",
+    "Otočit o 180°": "Rotate 180°",
+    "Otočit o {st}°  (T)": "Rotate by {st}°  (T)",
+    "Transformace… (měřítko, úhel)  (Ctrl+T)": "Transform… (scale, angle)  (Ctrl+T)",
+    "Zvětšit o 5 %  (+)": "Enlarge by 5 %  (+)",
+    "Zmenšit o 5 %  (−)": "Shrink by 5 %  (−)",
+    "Původní měřítko kusu (100 %)": "Reset piece scale (100 %)",
+    "Odemknout  (L)": "Unlock  (L)",
+    "Zamknout na místě  (L)": "Lock in place  (L)",
+    "Duplikovat  (Ctrl+D)": "Duplicate  (Ctrl+D)",
+    "Smazat  (Del)": "Delete  (Del)",
+    "Obnovit smazaný gravír objektu": "Restore erased engraving of this object",
+    # --- dialog Přidat objekt
+    "Přidat objekt": "Add object",
+    "Řez (SVG):": "Cut (SVG):",
+    "Řez (*.svg)": "Cut (*.svg)",
+    "Gravír (PNG/SVG):": "Engraving (PNG/SVG):",
+    "Gravír (*.png *.svg *.jpg *.jpeg *.bmp)": "Engraving (*.png *.svg *.jpg *.jpeg *.bmp)",
+    "Název:": "Name:",
+    "Počet kusů:": "Quantity:",
+    "Šířka (jen gravír bez řezu):": "Width (engraving without cut only):",
+    "podle souboru": "from file",
+    "Gravír a řez musí mít stejné plátno (počátek vlevo nahoře).\n":
+        "Engraving and cut must share the same canvas (origin top left).\n",
+    "Stačí jen jeden z nich: bez gravíru se díl jen vyřízne, bez řezu se jen vygravíruje\n":
+        "One of them is enough: without engraving the part is only cut, without a cut it is only engraved\n",
+    "(u obrázku bez řezu zadej šířku v mm – JPG většinou skutečný rozměr nenese).":
+        "(for an image without a cut, enter its width in mm – JPGs usually carry no real size).",
+    "Vybrat soubor": "Choose file",
+    "⚠ Soubor v poli Řez obsahuje vyplněné tvary – vypadá jako gravír.":
+        "⚠ The file in the Cut field contains filled shapes – it looks like an engraving.",
+    "⚠ Soubor v poli Gravír obsahuje jen čáry – vypadá jako řez.":
+        "⚠ The file in the Engraving field contains only lines – it looks like a cut.",
+    "⚠ Řez a gravír jsou nejspíš prohozené – při OK je prohodím.":
+        "⚠ Cut and engraving are probably swapped – they will be swapped back on OK.",
+    # --- transformace
+    "Transformace": "Transform",
+    "Měřítko:": "Scale:",
+    "Šířka:": "Width:",
+    "Výška:": "Height:",
+    "(víc různých objektů – rozměr v mm nastav po jednom)":
+        "(several different objects – set the size in mm one at a time)",
+    "Úhel:": "Angle:",
+    "Měřítko je vždy rovnoměrné (šířka i výška stejně).": "Scaling is always uniform (width and height alike).",
+    "⚠ Gravír je obrázek – při {pct} % má jen {res} bodu/mm (bude zubatější). Lepší je SVG gravír.":
+        "⚠ The engraving is a bitmap – at {pct} % it has only {res} dots/mm (it will look jagged). An SVG engraving is better.",
+    "⚠ Nejmenší otvor bude jen {mm} mm (pod 2,5 mm).": "⚠ The smallest hole will be only {mm} mm (below 2.5 mm).",
+    "Měřítko objektu – {name}": "Object scale – {name}",
+    "Transformace – {n} ks": "Transform – {n} pcs",
+    # --- profil
+    "Profil laseru": "Laser profile",
+    "Výkon v % se převádí na S podle „Max. S“ (GRBL $30, obvykle 1000).\n":
+        "Power in % is converted to S using “Max. S” (GRBL $30, usually 1000).\n",
+    "Gravír používá M4 (dynamický výkon), řez M3. GRBL musí mít $32=1.":
+        "Engraving uses M4 (dynamic power), cutting M3. GRBL must have $32=1.",
+    "Profil": "Profile",
+    "Překližka 3 mm – 10 W": "Plywood 3 mm – 10 W",
+    "Překližka 3 mm – 5 W": "Plywood 3 mm – 5 W",
+    "Gravír – rychlost [mm/min]": "Engrave – speed [mm/min]",
+    "Gravír – výkon [%]": "Engrave – power [%]",
+    "Gravír – hustota řádků [ř/mm]": "Engrave – line density [lines/mm]",
+    "Řez – rychlost [mm/min]": "Cut – speed [mm/min]",
+    "Řez – výkon [%]": "Cut – power [%]",
+    "Řez – počet průchodů": "Cut – passes",
+    "Řez – kerf, šířka řezu [mm] (0 = vypnuto)": "Cut – kerf, cut width [mm] (0 = off)",
+    "Max. S (GRBL $30)": "Max. S (GRBL $30)",
+    "Air assist (M8/M9)": "Air assist (M8/M9)",
+    "Nový profil": "New profile",
+    "Smazat profil „{name}“?": "Delete profile “{name}”?",
+    # --- export dialog
+    "Export": "Export",
+    "Složka:": "Folder:",
+    "Název souborů:": "File name:",
+    "Barevné SVG  (černá = gravír, červená = řez) – jen pro LightBurn / Inkscape":
+        "Colored SVG  (black = engrave, red = cut) – for LightBurn / Inkscape only",
+    "LaserGRBL: gravír PNG + řez SVG (plátno = deska)": "LaserGRBL: engraving PNG + cut SVG (canvas = board)",
+    "G-code (gravír + řez v jednom souboru)": "G-code (engraving + cut in one file)",
+    "Profil:": "Profile:",
+    "Levý dolní roh desky": "Bottom left corner of the board",
+    "Levý horní roh desky (Y do minusu)": "Top left corner of the board (negative Y)",
+    "Nula (počátek):": "Zero (origin):",
+    "Gravír + řez": "Engrave + cut",
+    "Jen gravír": "Engrave only",
+    "Jen řez": "Cut only",
+    "Dva soubory (gravír a řez zvlášť)": "Two files (engrave and cut separately)",
+    "Obsah:": "Content:",
+    "Nejdřív všechen gravír, potom řez": "All engraving first, then cutting",
+    "Po dílech (u každého dílu gravír a hned řez)": "Part by part (engrave each part, then cut it)",
+    "Pořadí:": "Order:",
+    "Pauza (M0) mezi gravírem a řezem": "Pause (M0) between engraving and cutting",
+    "Řez (platí pro G-code i SVG)": "Cutting (applies to G-code and SVG)",
+    "bez můstků": "no tabs",
+    " na díl": " per part",
+    "šířka": "width",
+    "Můstky:": "Tabs:",
+    "Kerf:": "Kerf:",
+    "{k} mm (z profilu)": "{k} mm (from profile)",
+    "vypnutý (nastavíš v profilu laseru)": "off (set it in the laser profile)",
+    "Rám (framing) – kontrola polohy desky": "Frame (framing) – check the board position",
+    "Samostatný soubor  …_0_ram.gcode": "Separate file  …_0_frame.gcode",
+    "Rám i na začátek hlavního G-code + pauza (M0)": "Frame also at the start of the main G-code + pause (M0)",
+    "Obdélník kolem všech dílů": "Rectangle around all parts",
+    "Obrys tvarů („gumička“)": "Outline of the shapes (“rubber band”)",
+    "Tvar:": "Shape:",
+    "0 % (laser vypnutý)": "0 % (laser off)",
+    "Výkon:": "Power:",
+    "Rychlost:": "Speed:",
+    "Diodový laser bez ukazovátka: 0,5–1 % je vidět jako slabá tečka a nepálí.\n":
+        "Diode laser without a pointer: 0.5–1 % shows as a faint dot and does not burn.\n",
+    "Při rámu měj ochranné brýle.": "Wear safety glasses while framing.",
+    "Exportovat": "Export",
+    "Složka pro export": "Export folder",
+    # --- hlavní okno
+    "Deska": "Board",
+    "Rozměr [mm]:": "Size [mm]:",
+    "Okraj desky [mm]:": "Board margin [mm]:",
+    "Mezera mezi díly [mm]:": "Gap between parts [mm]:",
+    "Otáčení:": "Rotation:",
+    "Přesnost:": "Precision:",
+    "Počet pokusů:": "Attempts:",
+    "Odkud se deska začne zaplňovat – u zbytků desek dej roh, kde máš nulu laseru.":
+        "Where filling the board starts – for offcuts choose the corner with your laser zero.",
+    "Po sloupcích se hodí pro úzké a vysoké zbytky desek.": "Columns suit narrow, tall offcuts.",
+    "Začít plnit od:": "Start filling from:",
+    "Odsud se deska začne zaplňovat": "Filling the board starts here",
+    "Objekty": "Objects",
+    "Název": "Name",
+    "Počet": "Qty",
+    "Vyplnit": "Fill",
+    "Měřítko": "Scale",
+    "Rozměr [mm]": "Size [mm]",
+    "Dvojklik = zadat šířku nebo výšku v mm": "Double-click = enter width or height in mm",
+    "Přidat…": "Add…",
+    "Odebrat": "Remove",
+    "+1 na desku": "+1 on board",
+    "Přidá jeden kus vybraného objektu na volné místo": "Adds one piece of the selected object to a free spot",
+    "„Vyplnit“ = po umístění zadaných kusů doplní objekt do zbytku desky.\n":
+        "“Fill” = after placing the given quantity, fills the rest of the board with the object.\n",
+    "Měřítko platí pro všechny kusy objektu, dvojklik na Rozměr = zadat mm.\n":
+        "Scale applies to all pieces of the object, double-click Size = enter mm.\n",
+    "Soubory lze na okno i přetáhnout.": "Files can also be dragged onto the window.",
+    "▶  Rozmístit": "▶  Nest",
+    "Zamčené díly zůstanou na místě, doskládá se jen zbytek do zadaných počtů.":
+        "Locked parts stay in place, only the rest is nested up to the given quantities.",
+    "Vyčistit desku": "Clear board",
+    "Smaže nezamčené díly (když zbývají jen zamčené, smaže i ty).":
+        "Removes unlocked parts (if only locked ones are left, removes those too).",
+    "✎  Upravit gravír (E)": "✎  Edit engraving (E)",
+    "Kliknutím na část gravíru (tečku, nápis…) ji smažeš u všech kusů objektu.\n":
+        "Click a part of the engraving (a dot, some text…) to erase it on all pieces of the object.\n",
+    "Vrácení: Ctrl+Z, nebo pravé tlačítko → Obnovit smazaný gravír.":
+        "Undo: Ctrl+Z, or right-click → Restore erased engraving.",
+    "Upravit": "Edit",
+    "Nový": "New",
+    "Smazat": "Delete",
+    "💾  Export…": "💾  Export…",
+    "Myš: táhni = posun, kolečko = zoom, pravé tl. = menu.\n":
+        "Mouse: drag = move, wheel = zoom, right button = menu.\n",
+    "Šipky = posun 1 mm (Shift 10 mm, Alt 0,1 mm), R / Shift+R = otočit o 90°, T = o krok,\n":
+        "Arrows = move 1 mm (Shift 10 mm, Alt 0.1 mm), R / Shift+R = rotate 90°, T = by step,\n",
+    "+ / − = měřítko ±5 %, Ctrl+T = transformace, L = zamknout, E = úprava gravíru,\n":
+        "+ / − = scale ±5 %, Ctrl+T = transform, L = lock, E = edit engraving,\n",
+    "Ctrl+Z / Ctrl+Y = zpět / znovu, Del = smazat, Ctrl+D = duplikovat.":
+        "Ctrl+Z / Ctrl+Y = undo / redo, Del = delete, Ctrl+D = duplicate.",
+    # --- menu
+    "Soubor": "File",
+    "Nový projekt": "New project",
+    "Otevřít projekt…": "Open project…",
+    "Uložit projekt": "Save project",
+    "Uložit projekt jako…": "Save project as…",
+    "Přidat objekt…": "Add object…",
+    "Export…": "Export…",
+    "Konec": "Quit",
+    "Úpravy": "Edit",
+    "Zpět": "Undo",
+    "Znovu": "Redo",
+    "Transformace… (měřítko, úhel)": "Transform… (scale, angle)",
+    "Zvětšit o 5 %": "Enlarge by 5 %",
+    "Zmenšit o 5 %": "Shrink by 5 %",
+    "Zamknout / odemknout": "Lock / unlock",
+    "Upravit gravír (mazání kliknutím)": "Edit engraving (click to erase)",
+    "Otočit o 90° doprava": "Rotate 90° clockwise",
+    "Otočit o 90° doleva": "Rotate 90° counter-clockwise",
+    "Otočit o krok": "Rotate by step",
+    "Duplikovat": "Duplicate",
+    "Vybrat vše": "Select all",
+    "Přizpůsobit zobrazení": "Fit view",
+    "Nápověda": "Help",
+    "Jazyk / Language": "Language / Jazyk",
+    "O programu": "About",
+    "Rozmístění dílů pro laser (gravír + řez)": "Part nesting for lasers (engrave + cut)",
+    "Profily: {d}": "Profiles: {d}",
+    # --- stav
+    "Na desce: {n} ks": "On board: {n} pcs",
+    "<b>Na desce:</b> {n} ks": "<b>On board:</b> {n} pcs",
+    "<b>Využití desky:</b> {u} %": "<b>Board usage:</b> {u} %",
+    "⚠ {n} dílů koliduje nebo přesahuje okraj": "⚠ {n} parts collide or exceed the margin",
+    "🔒 Zamčeno: {n} ks": "🔒 Locked: {n} pcs",
+    "<b>Vybráno:</b> {n} ks · měřítko ": "<b>Selected:</b> {n} pcs · scale ",
+    "<span style='color:#06c'><b>✎ Úprava gravíru:</b> klikni na část gravíru, kterou chceš smazat ":
+        "<span style='color:#06c'><b>✎ Editing engraving:</b> click the part of the engraving you want to erase ",
+    "(platí pro všechny kusy objektu). Ctrl+Z vrací.</span>": "(applies to all pieces of the object). Ctrl+Z undoes.</span>",
+    "<span style='color:#d00'>Nevešlo se: ": "<span style='color:#d00'>Did not fit: ",
+    # --- hlášky
+    "Chyba": "Error",
+    "Vyber soubor řezu (SVG) nebo gravíru.": "Choose a cut (SVG) or engraving file.",
+    "Soubor řezu neexistuje:\n{f}": "The cut file does not exist:\n{f}",
+    "Chyba načtení": "Loading error",
+    "Řez: {c}\nGravír: {e}": "Cut: {c}\nEngraving: {e}",
+    "— (jen gravír)": "— (engraving only)",
+    "— (jen řez)": "— (cut only)",
+    "Info": "Info",
+    "Vyber v tabulce objekt.": "Select an object in the table.",
+    "Na desce už pro tento objekt není místo.": "There is no more room on the board for this object.",
+    "Nejdřív přidej objekty.": "Add some objects first.",
+    "Zadej počet kusů nebo zatrhni „Vyplnit“.": "Enter a quantity or tick “Fill”.",
+    "Rozmísťuji…": "Nesting…",
+    "Zrušit": "Cancel",
+    "Nevešlo se": "Did not fit",
+    "{n} kusů se na desku nevešlo.": "{n} pieces did not fit on the board.",
+    "Vyber na desce díl (zamčené díly nejdou měnit).": "Select a part on the board (locked parts cannot be changed).",
+    "Tady není žádný gravír (klikni přímo na čáru nebo tečku).":
+        "There is no engraving here (click directly on a line or dot).",
+    "Deska je prázdná.": "The board is empty.",
+    "Kolize": "Collision",
+    "{n} dílů koliduje nebo přesahuje okraj. Přesto exportovat?":
+        "{n} parts collide or exceed the margin. Export anyway?",
+    "   (rám)": "   (frame)",
+    "   (odhad ≈ {m} min)": "   (estimate ≈ {m} min)",
+    "Chyba exportu": "Export error",
+    "Uloženo:\n": "Saved:\n",
+    "\n\nLaserGRBL: načti …_1_gravir.png, velikost {w} × {h} mm, offset 0/0, vypal;\n":
+        "\n\nLaserGRBL: load …_1_engrave.png, size {w} × {h} mm, offset 0/0, burn;\n",
+    "pak …_2_rez.svg se stejnou velikostí a offsetem 0/0.": "then …_2_cut.svg with the same size and offset 0/0.",
+    "\n\nNejdřív spusť …_0_ram.gcode a zkontroluj, že rám leží na desce.":
+        "\n\nRun …_0_frame.gcode first and check that the frame lies on the board.",
+    "\n\nG-code: nulu nastav do levého dolního rohu desky. Odhad času je hrubý (bez zrychlení).":
+        "\n\nG-code: set zero to the bottom left corner of the board. The time estimate is rough (no acceleration).",
+    "\n\nG-code: nulu nastav do levého horního rohu desky. Odhad času je hrubý (bez zrychlení).":
+        "\n\nG-code: set zero to the top left corner of the board. The time estimate is rough (no acceleration).",
+    "Export hotov": "Export finished",
+    "LaserNest projekt (*.lnest)": "LaserNest project (*.lnest)",
+    "Otevřít projekt": "Open project",
+    "LaserNest – chyba": "LaserNest – error",
+    # --- názvy exportovaných souborů
+    "deska": "board",
+    "_1_gravir.png": "_1_engrave.png",
+    "_2_rez.svg": "_2_cut.svg",
+    "_1_gravir.gcode": "_1_engrave.gcode",
+    "_2_rez.gcode": "_2_cut.gcode",
+    "_0_ram.gcode": "_0_frame.gcode",
+    # --- G-code komentáře
+    "; ---- RÁM (laser {p} %) ----": "; ---- FRAME (laser {p} %) ----",
+    "; ---- RÁM (laser vypnutý) ----": "; ---- FRAME (laser off) ----",
+    "; LaserNest – rám (obdélník), deska {w} x {h} mm": "; LaserNest – frame (rectangle), board {w} x {h} mm",
+    "; LaserNest – rám (obrys tvarů), deska {w} x {h} mm": "; LaserNest – frame (shape outline), board {w} x {h} mm",
+    "; nula = levý dolní roh desky": "; zero = bottom left corner of the board",
+    "; nula = levý horní roh desky": "; zero = top left corner of the board",
+    "; nula = levý horní roh desky (Y do minusu)": "; zero = top left corner of the board (negative Y)",
+    "; LaserNest – deska {w} x {h} mm, {n} dílů": "; LaserNest – board {w} x {h} mm, {n} parts",
+    "; profil: {name}": "; profile: {name}",
+    "; pořadí: po dílech": "; order: part by part",
+    "; pořadí: nejdřív gravír, pak řez": "; order: engraving first, then cutting",
+    ", můstky {n}× {w} mm": ", tabs {n}× {w} mm",
+    "; ---- PAUZA po rámu – zkontroluj polohu desky a pokračuj (Resume/Cycle start) ----":
+        "; ---- PAUSE after frame – check the board position and continue (Resume/Cycle start) ----",
+    "; ---- DÍL: {name} ----": "; ---- PART: {name} ----",
+    "; gravír": "; engrave",
+    "; řez": "; cut",
+    "; ---- GRAVÍR ----": "; ---- ENGRAVE ----",
+    "; ---- PAUZA před řezem (pokračuj tlačítkem Resume/Cycle start) ----":
+        "; ---- PAUSE before cutting (continue with Resume/Cycle start) ----",
+    "; ---- ŘEZ ----": "; ---- CUT ----",
+    # --- chyby načítání
+    "V souboru řezu nejsou žádné čáry: {f}": "The cut file contains no lines: {f}",
+    "Zadej soubor řezu nebo gravíru.": "Specify a cut or engraving file.",
+    "V SVG gravíru nejsou žádné vyplněné tvary.": "The engraving SVG contains no filled shapes.",
+    "Obrázek gravíru je celý bílý – není co pálit.": "The engraving image is all white – nothing to burn.",
+}

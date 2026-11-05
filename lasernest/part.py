@@ -16,6 +16,8 @@ from shapely.geometry import LineString, MultiPolygon, Polygon
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 
+from .i18n import T
+
 PX_PER_MM_96 = 96 / 25.4          # svgelements převádí jednotky na px při 96 DPI
 SAMPLE_MM = 0.15                  # krok vzorkování křivek
 PREVIEW_RES = 10                  # px/mm vnitřního rastru gravíru
@@ -208,7 +210,7 @@ def load_cut(path):
                 pts = pts + [pts[0]]
             paths.append(CutPath(pts, closed))
     if not paths:
-        raise ValueError(f"V souboru řezu nejsou žádné čáry: {os.path.basename(path)}")
+        raise ValueError(T("V souboru řezu nejsou žádné čáry: {f}", f=os.path.basename(path)))
     # otvory = uzavřené cesty ležící uvnitř jiné (větší) uzavřené cesty
     cl = [(cp, make_valid(Polygon(cp.pts))) for cp in paths if cp.closed and len(cp.pts) > 3]
     for cp, poly in cl:
@@ -294,7 +296,8 @@ def guess_pair(path):
     d, b = os.path.split(path)
     stem, ext = os.path.splitext(b)
     cands = []
-    for a, bb in (("_2_rez", "_1_gravir"), ("_rez", "_gravir"), ("_cut", "_engrave"), ("-cut", "-engrave")):
+    for a, bb in (("_2_rez", "_1_gravir"), ("_2_cut", "_1_engrave"), ("_rez", "_gravir"), ("_cut", "_engrave"),
+                  ("-cut", "-engrave")):
         if stem.endswith(a):
             base = stem[: -len(a)]
             cands += [os.path.join(d, base + bb + e) for e in (".png", ".svg", ".jpg", ".bmp")]
@@ -340,7 +343,7 @@ def file_role(path):
 
 def part_name(path):
     stem = os.path.splitext(os.path.basename(path))[0]
-    for suf in ("_2_rez", "_1_gravir", "_rez", "_gravir", "_cut", "_engrave", "-cut", "-engrave"):
+    for suf in ("_2_rez", "_1_gravir", "_2_cut", "_1_engrave", "_rez", "_gravir", "_cut", "_engrave", "-cut", "-engrave"):
         if stem.endswith(suf):
             return stem[: -len(suf)]
     return stem
@@ -350,7 +353,7 @@ def load_part(cut_file, engrave_file=None, name=None, width_mm=0.0):
     """width_mm > 0: přeškáluje gravír bez řezu na danou šířku (u obrázku bez rozměru)."""
     if not cut_file:
         if not engrave_file:
-            raise ValueError("Zadej soubor řezu nebo gravíru.")
+            raise ValueError(T("Zadej soubor řezu nebo gravíru."))
         return _load_engrave_only(engrave_file, name, width_mm)
     cut, outline, (cw, ch) = load_cut(cut_file)
     minx, miny, maxx, maxy = outline.bounds
@@ -377,7 +380,7 @@ def _load_engrave_only(engrave_file, name, width_mm):
     if engrave_file.lower().endswith(".svg"):
         vec, (w, h) = load_engrave_svg(engrave_file)
         if vec is None:
-            raise ValueError("V SVG gravíru nejsou žádné vyplněné tvary.")
+            raise ValueError(T("V SVG gravíru nejsou žádné vyplněné tvary."))
         bx = vec.bounds
         if width_mm and width_mm > 0:
             from shapely import affinity
@@ -392,7 +395,7 @@ def _load_engrave_only(engrave_file, name, width_mm):
         img, res = load_engrave_raster(engrave_file)
         a = np.asarray(img) < 128
         if not a.any():
-            raise ValueError("Obrázek gravíru je celý bílý – není co pálit.")
+            raise ValueError(T("Obrázek gravíru je celý bílý – není co pálit."))
         ys, xs = np.nonzero(a)
         img = img.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
         if width_mm and width_mm > 0:

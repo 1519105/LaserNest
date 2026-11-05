@@ -13,6 +13,8 @@ from PySide6.QtCore import QEventLoop, QPointF, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QMessageBox
 
+from lasernest.i18n import set_lang
+set_lang("cs")      # testy kontrolují české texty
 from lasernest import gui
 
 EX = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "examples")
@@ -57,8 +59,8 @@ w = gui.MainWindow()
 w.resize(1500, 950)
 w.show()
 w.activateWindow()
-w.add_part(os.path.join(EX, "sobik_2_rez.svg"), os.path.join(EX, "sobik_1_gravir.png"), count=3)
-w.add_part(os.path.join(EX, "stromecek_2_rez.svg"), os.path.join(EX, "stromecek_1_gravir.png"), count=5)
+w.add_part(os.path.join(EX, "reindeer_2_cut.svg"), os.path.join(EX, "reindeer_1_engrave.png"), count=3)
+w.add_part(os.path.join(EX, "tree_2_cut.svg"), os.path.join(EX, "tree_1_engrave.png"), count=5)
 nest(w)
 check(len(w.items) == 8, "rozmístění 8 kusů")
 

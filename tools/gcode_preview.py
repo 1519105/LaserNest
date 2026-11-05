@@ -15,7 +15,7 @@ def main(src, dst, res=4.0):
     for ln in open(src, encoding="utf-8"):
         ln = ln.strip()
         if ln.startswith(";"):
-            if "RÁM" in ln: section = "f"
+            if "RÁM" in ln or "FRAME" in ln: section = "f"
             continue
         p = ln.split()
         if not p:

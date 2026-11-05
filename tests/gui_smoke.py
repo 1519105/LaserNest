@@ -8,6 +8,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from lasernest.i18n import set_lang
+set_lang("cs")      # testy kontrolují české texty
 from lasernest import gui
 
 EX = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "examples")
@@ -35,8 +37,8 @@ def main(out):
     QTimer.singleShot(300, close_dialog); act.trigger()
     print("dialogy otevřeny:", seen)
     assert seen == ["AddPartDialog", "AddPartDialog"], seen
-    w.add_part(os.path.join(EX, "sobik_2_rez.svg"), os.path.join(EX, "sobik_1_gravir.png"), count=6)
-    w.add_part(os.path.join(EX, "stromecek_2_rez.svg"), os.path.join(EX, "stromecek_1_gravir.png"), count=8, fill=True)
+    w.add_part(os.path.join(EX, "reindeer_2_cut.svg"), os.path.join(EX, "reindeer_1_engrave.png"), count=6)
+    w.add_part(os.path.join(EX, "tree_2_cut.svg"), os.path.join(EX, "tree_1_engrave.png"), count=8, fill=True)
     w.parts[1].fill = True
     loop = QEventLoop()
     w.run_nest()

@@ -50,7 +50,8 @@ def load():
             return out
     except Exception:
         pass
-    return [dict(d) for d in DEFAULTS]
+    from .i18n import T
+    return [dict(d, name=T(d["name"])) for d in DEFAULTS]
 
 
 def save(profiles):

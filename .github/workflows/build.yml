@@ -34,6 +34,7 @@ jobs:
         run: |
           python tests/test_core.py
           python tests/test_v02.py
+          python tests/test_i18n.py --static
       - name: Sestavení
         run: python build.py
       - name: Přejmenování
