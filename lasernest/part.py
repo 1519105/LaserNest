@@ -17,6 +17,7 @@ from shapely.ops import unary_union
 from shapely.validation import make_valid
 
 from .i18n import T
+from . import photo as PH
 
 PX_PER_MM_96 = 96 / 25.4          # svgelements převádí jednotky na px při 96 DPI
 SAMPLE_MM = 0.15                  # krok vzorkování křivek
@@ -122,10 +123,31 @@ class Part:
     meta: dict = field(default_factory=dict)
     scale: float = 1.0                # měřítko objektu (všechny kusy)
     erase: list = field(default_factory=list)   # body [(x, y) mm] smazaných ostrůvků gravíru
+    src_gray: object = None           # původní šedý obrázek gravíru (jen u rastrového gravíru)
+    photo: dict = field(default_factory=dict)   # nastavení obrázku (režim, jas, kontrast…) – viz photo.py
 
     def __post_init__(self):
+        self._gray0 = self.src_gray.copy() if self.src_gray is not None else None
+        if self.src_gray is not None:
+            self.reprocess()
         self._img0 = self.engrave_img.copy() if self.engrave_img is not None else None
         self._vec0 = self.engrave_vec
+
+    @property
+    def is_photo(self):
+        return self.src_gray is not None
+
+    def adjusted(self):
+        return PH.adjust(self.src_gray, self.photo)
+
+    def reprocess(self):
+        """Z šedého obrázku (po smazání ostrůvků) a nastavení vytvoří obrázek k pálení."""
+        if self.src_gray is not None:
+            self.engrave_img = PH.quantize(self.adjusted(), self.photo)
+
+    def set_photo(self, ph):
+        self.photo = dict(ph or {})
+        self.set_erase(list(self.erase))
 
     @property
     def area(self):
@@ -152,6 +174,8 @@ class Part:
             w, h = self.engrave_img.width / self.img_res, self.engrave_img.height / self.img_res
             self.engrave_img = rasterize(self.engrave_vec, w, h, self.img_res)
             return True
+        if self.src_gray is not None:
+            return self._erase_gray(x, y)
         a = np.asarray(self.engrave_img)
         r = self.img_res
         px, py = int(x * r), int(y * r)
@@ -172,6 +196,36 @@ class Part:
         self.engrave_img = img
         return True
 
+    def _erase_gray(self, x, y):
+        """Mazání u obrázku: souvislá oblast „ne-bílé“ (u prahu: černé) plochy pod kurzorem."""
+        ph = PH.settings(self.photo)
+        if ph["mode"] == "threshold":
+            mask = np.asarray(self.engrave_img) < 128
+        else:
+            mask = np.asarray(self.adjusted()) < 245
+        r = self.img_res
+        px, py = int(x * r), int(y * r)
+        R = max(1, int(1.5 * r))
+        x0, y0 = max(0, px - R), max(0, py - R)
+        win = mask[y0:py + R + 1, x0:px + R + 1]
+        if not win.any():
+            return False
+        ys, xs = np.nonzero(win)
+        d = (xs + x0 - px) ** 2 + (ys + y0 - py) ** 2
+        k = int(np.argmin(d))
+        if d[k] > R * R:
+            return False
+        sx, sy = int(xs[k] + x0), int(ys[k] + y0)
+        m = Image.fromarray(np.where(mask, 0, 128).astype(np.uint8), "L").copy()   # copy: zapisovatelný
+        ImageDraw.floodfill(m, (sx, sy), 255, thresh=0)
+        comp = np.asarray(m) == 255
+        g = np.array(self.src_gray)
+        # bílá po úpravách = 255 v originále jen bez negativu; s negativem je "nic" černá
+        g[comp] = 0 if ph["invert"] else 255
+        self.src_gray = Image.fromarray(g, "L")
+        self.reprocess()
+        return True
+
     def erase_at(self, x, y):
         if self._erase_one(x, y):
             self.erase.append((round(x, 3), round(y, 3)))
@@ -180,7 +234,11 @@ class Part:
 
     def set_erase(self, points):
         """Obnoví gravír z originálu a znovu aplikuje seznam smazaných bodů."""
-        self.engrave_img = self._img0.copy() if self._img0 is not None else None
+        if self._gray0 is not None:
+            self.src_gray = self._gray0.copy()
+            self.reprocess()
+        else:
+            self.engrave_img = self._img0.copy() if self._img0 is not None else None
         self.engrave_vec = self._vec0
         self.erase = []
         for x, y in points:
@@ -271,7 +329,7 @@ def rasterize(geom, w_mm, h_mm, res=PREVIEW_RES, ox=0.0, oy=0.0):
     return img
 
 
-def load_engrave_raster(path, fallback_size_mm=None):
+def load_engrave_raster(path, fallback_size_mm=None, gray=False):
     im = Image.open(path)
     dpi = im.info.get("dpi")
     if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
@@ -287,7 +345,8 @@ def load_engrave_raster(path, fallback_size_mm=None):
         res = float(dpi[0]) / 25.4
     else:
         res = 96 / 25.4
-    im = im.point(lambda v: 0 if v < 128 else 255)
+    if not gray:
+        im = im.point(lambda v: 0 if v < 128 else 255)
     return im, res
 
 
@@ -366,7 +425,11 @@ def load_part(cut_file, engrave_file=None, name=None, width_mm=0.0):
             if vec is not None:
                 img = rasterize(vec, canvas_w, canvas_h, PREVIEW_RES)
         else:
-            img, res = load_engrave_raster(engrave_file, (canvas_w, canvas_h))
+            gray, res = load_engrave_raster(engrave_file, (canvas_w, canvas_h), gray=True)
+            return Part(name=name or part_name(cut_file), cut=cut, outline=outline,
+                        engrave_img=None, img_res=res, engrave_vec=None, src_gray=gray,
+                        cut_file=cut_file, engrave_file=engrave_file,
+                        meta={"canvas": (canvas_w, canvas_h)})
     return Part(name=name or part_name(cut_file), cut=cut, outline=outline,
                 engrave_img=img, img_res=res, engrave_vec=vec,
                 cut_file=cut_file, engrave_file=engrave_file or "",
@@ -392,15 +455,19 @@ def _load_engrave_only(engrave_file, name, width_mm):
         cw, ch = bx[2] - bx[0], bx[3] - bx[1]
         img, res = rasterize(vec, cw, ch, PREVIEW_RES), PREVIEW_RES
     else:
-        img, res = load_engrave_raster(engrave_file)
-        a = np.asarray(img) < 128
+        gray, res = load_engrave_raster(engrave_file, gray=True)
+        a = np.asarray(gray) < 250
         if not a.any():
             raise ValueError(T("Obrázek gravíru je celý bílý – není co pálit."))
         ys, xs = np.nonzero(a)
-        img = img.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
+        gray = gray.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
         if width_mm and width_mm > 0:
-            res = img.width / width_mm
-        cw, ch = img.width / res, img.height / res
+            res = gray.width / width_mm
+        cw, ch = gray.width / res, gray.height / res
+        return Part(name=name or part_name(engrave_file), cut=[], outline=box(0, 0, cw, ch),
+                    engrave_img=None, img_res=res, engrave_vec=None, src_gray=gray,
+                    cut_file="", engrave_file=engrave_file,
+                    meta={"canvas": (cw, ch), "width_mm": width_mm or 0.0})
     return Part(name=name or part_name(engrave_file), cut=[], outline=box(0, 0, cw, ch),
                 engrave_img=img, img_res=res, engrave_vec=vec,
                 cut_file="", engrave_file=engrave_file,

@@ -11,12 +11,14 @@ from shapely.geometry import LineString, Polygon
 from shapely.ops import unary_union
 
 from .i18n import T
+from . import photo as PH
 from .nest import apply, eff_scale, place_geom, place_matrix
 
 
 # ------------------------------------------------------------ gravír rastr
 def _tile(parts, pl, res, W, H):
-    """Gravír jednoho kusu vykreslený do výřezu desky -> (x0, y0, tile L) nebo None."""
+    """Gravír jednoho kusu ve výřezu desky -> (x0, y0, úrovně výkonu uint8) nebo None.
+    Úroveň 0 = nepálit, 255 = výkon gravíru z profilu (stupně šedi mají mezihodnoty)."""
     p = parts[pl.part]
     if p.engrave_img is None:
         return None
@@ -40,27 +42,36 @@ def _tile(parts, pl, res, W, H):
     C = q * (c * (x0 / res - pl.tx) + s * (y0 / res - pl.ty))
     D, E = -s * k, c * k
     F = q * (-s * (x0 / res - pl.tx) + c * (y0 / res - pl.ty))
+    coef = (A, B, C, D, E, F)
+    size = (x1 - x0, y1 - y0)
+    mode = PH.settings(p.photo)["mode"] if p.is_photo else "threshold"
+    if mode in ("fs", "jarvis", "gray"):
+        # fotky: šedý obrázek se převzorkuje do rozlišení řádků a teprve tady se rastruje
+        tile = p.adjusted().transform(size, Image.AFFINE, coef, resample=Image.BILINEAR, fillcolor=255)
+        return x0, y0, PH.levels(PH.quantize(tile, p.photo), p.photo)
     exact = (pl.angle % 90 == 0) and abs(sc - 1.0) < 1e-9 and abs(p.img_res - res) < 1e-9
     resample = Image.NEAREST if exact else Image.BILINEAR
-    tile = p.engrave_img.transform((x1 - x0, y1 - y0), Image.AFFINE, (A, B, C, D, E, F),
-                                   resample=resample, fillcolor=255)
-    if not exact:
-        tile = tile.point(lambda v: 0 if v < 128 else 255)
-    return x0, y0, tile
+    tile = p.engrave_img.transform(size, Image.AFFINE, coef, resample=resample, fillcolor=255)
+    return x0, y0, np.where(np.asarray(tile) < 128, 255, 0).astype(np.uint8)
 
 
-def board_raster(parts, placements, board_w, board_h, res):
-    """Celá deska jako obrázek L (0 = pálit), res px/mm, počátek levý horní roh."""
+def board_levels(parts, placements, board_w, board_h, res):
+    """Úrovně výkonu celé desky (uint8, 0 = nepálit), res px/mm, počátek levý horní roh."""
     W, H = round(board_w * res), round(board_h * res)
-    board = Image.new("L", (W, H), 255)
+    lv = np.zeros((H, W), np.uint8)
     for pl in placements:
         t = _tile(parts, pl, res, W, H)
         if t is None:
             continue
-        x0, y0, tile = t
-        region = board.crop((x0, y0, x0 + tile.width, y0 + tile.height))
-        board.paste(ImageChops.darker(region, tile), (x0, y0))
-    return board
+        x0, y0, a = t
+        h, w = a.shape
+        np.maximum(lv[y0:y0 + h, x0:x0 + w], a, out=lv[y0:y0 + h, x0:x0 + w])
+    return lv
+
+
+def board_raster(parts, placements, board_w, board_h, res):
+    """Celá deska jako obrázek L (0 = plný výkon, 255 = nic; stupně šedi = mezihodnoty)."""
+    return Image.fromarray(255 - board_levels(parts, placements, board_w, board_h, res), "L")
 
 
 def _engrave_blocks(a, gap_px, start=(0, 0)):
@@ -277,7 +288,7 @@ def svg_cut(path, parts, placements, board_w, board_h, cut_opts=None):
 
 def _png_b64(img):
     # černá = pálit, bílá = průhledná (aby se překrývající se obdélníky dílů nezakrývaly)
-    alpha = img.point(lambda v: 255 if v < 128 else 0)
+    alpha = img.point(lambda v: 255 - v)
     la = Image.merge("LA", (Image.new("L", img.size, 0), alpha))
     b = io.BytesIO()
     la.save(b, "PNG", optimize=True)
@@ -346,8 +357,9 @@ class _G:
     def add(self, *ln):
         self.lines += ln
 
-    def engrave(self, a, res, x_off, y_off, S, F, gap_px):
-        """a = bool bitmapa výřezu, (x_off, y_off) = jeho poloha v px desky."""
+    def engrave(self, a, res, x_off, y_off, S, F, gap_px, lv=None, s_full=None):
+        """a = bool bitmapa výřezu, (x_off, y_off) = jeho poloha v px desky.
+        lv = úrovně výkonu (uint8) pro stupně šedi – úsek se pak dělí podle úrovně a S se škáluje."""
         if not a.any():
             return
         self.add(f"G1 F{F}")
@@ -366,14 +378,25 @@ class _G:
                 yy = _f(self.Y(y))
                 prev = None
                 for r0, r1 in seq:
-                    xs, xe = _f(r0 / res), _f(r1 / res)
+                    xs = _f(r0 / res)
                     if prev is None:
                         self.add(f"G0 X{xs} Y{yy}")
                     elif abs(r0 - prev) <= gap_px:
                         self.add(f"G1 X{xs} S0")
                     else:
                         self.add(f"G0 X{xs}")
-                    self.add(f"G1 X{xe} S{S}")
+                    if lv is None:
+                        self.add(f"G1 X{_f(r1 / res)} S{S}")
+                    else:
+                        lo, hi = min(r0, r1), max(r0, r1)
+                        row = lv[v, lo - x_off:hi - x_off]
+                        cuts = np.nonzero(np.diff(row.astype(np.int16)))[0] + 1
+                        bounds = [0] + cuts.tolist() + [len(row)]
+                        subs = [(lo + bounds[i], lo + bounds[i + 1], int(row[bounds[i]])) for i in range(len(bounds) - 1)]
+                        if r0 > r1:
+                            subs = [(b_, a_, l_) for a_, b_, l_ in reversed(subs)]
+                        for _a, sb, l_ in subs:
+                            self.add(f"G1 X{_f(sb / res)} S{_f(s_full * l_ / 255)}")
                     prev = r1
                 self.cur = (prev / res, y)
 
@@ -452,7 +475,8 @@ def gcode(path, parts, placements, board_w, board_h, prof, *, do_engrave=True, d
                      frame.get("power", 0), frame.get("speed", 3000), smax)
         G.add(T("; ---- PAUZA po rámu – zkontroluj polohu desky a pokračuj (Resume/Cycle start) ----"), "M0")
     res = float(prof.get("lines_per_mm", 10))
-    Se = _f(smax * float(prof["engrave_power"]) / 100)
+    Se_num = smax * float(prof["engrave_power"]) / 100
+    Se = _f(Se_num)
     Fe = _f(float(prof["engrave_speed"]))
     Sc = _f(smax * float(prof["cut_power"]) / 100)
     Fc = _f(float(prof["cut_speed"]))
@@ -469,7 +493,8 @@ def gcode(path, parts, placements, board_w, board_h, prof, *, do_engrave=True, d
                 if t is not None:
                     x0, y0, tile = t
                     G.add(T("; gravír"), "M4 S0")
-                    G.engrave(np.asarray(tile) < 128, res, x0, y0, Se, Fe, gap_px)
+                    gray = bool(((tile > 0) & (tile < 255)).any())
+                    G.engrave(tile > 0, res, x0, y0, Se, Fe, gap_px, lv=tile if gray else None, s_full=Se_num)
                     G.add("M5")
             if do_cut:
                 paths = part_cut_paths(parts, pl, kerf, tabs, tab_w)
@@ -479,9 +504,11 @@ def gcode(path, parts, placements, board_w, board_h, prof, *, do_engrave=True, d
                 G.add("M5")
     else:
         if has_eng:
-            a = np.asarray(board_raster(parts, placements, board_w, board_h, res)) < 128
+            lvl = board_levels(parts, placements, board_w, board_h, res)
+            a = lvl > 0
+            gray = bool(((lvl > 0) & (lvl < 255)).any())
             G.add(T("; ---- GRAVÍR ----"), "M4 S0")
-            G.engrave(a, res, 0, 0, Se, Fe, gap_px)
+            G.engrave(a, res, 0, 0, Se, Fe, gap_px, lv=lvl if gray else None, s_full=Se_num)
             G.add("M5")
         if do_cut:
             if pause and has_eng:

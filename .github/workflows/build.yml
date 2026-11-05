@@ -39,6 +39,7 @@ jobs:
           python tests/test_v02.py
           python tests/test_i18n.py --static
           python tests/test_v04.py --no-gui
+          python tests/test_v05.py --no-gui
       - name: Sestavení
         run: python build.py
       - name: Přejmenování

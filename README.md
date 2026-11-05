@@ -48,6 +48,8 @@ export to G-code, SVG and PNG for LaserGRBL and LightBurn – one program, no in
 | **Cutting** | Tabs (count and width) so parts don't fall out, kerf compensation from the profile; holes first, then the outline |
 | **Optimization** | Parts ordered by shortest path from the laser zero; engraving in connected islands without travel across the board; time estimate |
 | **Profiles** | Speed, power, line density, passes, kerf, max. S (`$30`), air assist – saved and remembered |
+| **Text** | Text objects right in the program: any font (4 bundled + system fonts), engraved or cut-out letters, cut around (rectangle, oval, text outline), hanging hole, engraved frame; editable later |
+| **Photos** | Black & white (threshold), dithering (Floyd–Steinberg, Jarvis) or grayscale (power by brightness); brightness, contrast, gamma, negative, min. power |
 | **Material test grid** | Squares with different power × speed (engraving or cutting), value labels, optional border cut; click the best square and save it as a profile |
 | **Projects** | Save and open the whole board (`.lnest`) |
 | **Language** | English (default) and Czech – switch in **Help → Language / Jazyk** |
@@ -102,6 +104,25 @@ Download it only from there – other “download” sites often bundle ads or m
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Duplicate / delete | `Ctrl+D` / `Del` |
 | Zoom / whole board | mouse wheel / `F` |
+
+### Text (name tags, signs)
+
+**Text…** next to *Add…* opens a dialog with a live preview: text (more lines allowed), font,
+bold/italic, alignment, size in mm (width or height), letters *engraved* or *cut out*, cut around
+(none / rectangle / oval / text outline), margin, rounding, hanging hole and engraved frame.
+The text becomes a normal object (quantity, scale, nesting); double-click its name in the table to edit it.
+Bundled fonts: Lobster, Pacifico, Great Vibes, Oswald (SIL Open Font License, see `assets/fonts`).
+
+![text](docs/text_dialog.png)
+
+### Photos (dithering, grayscale)
+
+Double-click the name of an object with a bitmap engraving (or right-click a piece → *Engraving image settings…*):
+mode **black & white**, **dithering Floyd–Steinberg / Jarvis** or **grayscale** (laser power follows brightness,
+from *min. power* up to the profile's engraving power), plus brightness, contrast, gamma and negative.
+Dithering and grayscale are computed on export at the profile's line density, so the dots match the laser lines.
+
+![photo](docs/photo_dialog.png)
 
 ### Material test grid
 
@@ -228,7 +249,7 @@ python main.py
 ```
 
 Building your own exe/binary: `pip install pyinstaller && python build.py`.
-Tests: `python tests/test_core.py`, `python tests/test_v02.py`, `python tests/test_i18n.py`, `python tests/test_v04.py`.
+Tests: `python tests/test_core.py`, `python tests/test_v02.py`, `python tests/test_i18n.py`, `python tests/test_v04.py`, `python tests/test_v05.py`.
 Checking G-code: `python tools/gcode_preview.py board.gcode preview.png`.
 
 ## How the nesting works

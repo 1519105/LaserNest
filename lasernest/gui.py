@@ -10,6 +10,7 @@ import traceback
 from dataclasses import asdict
 
 import numpy as np
+from PIL import Image
 from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal, QObject
 from PySide6.QtGui import (QAction, QBrush, QColor, QImage, QKeySequence, QPainter, QPainterPath,
                            QPen, QPixmap)
@@ -28,6 +29,8 @@ from . import profiles as P
 from .nest import NestSettings, Nester, Placement, check, eff_scale, utilization
 from .part import file_role, guess_pair, load_part, part_name
 from . import testgrid as TG
+from . import textobj as TX
+from . import photo as PH
 
 ROTS = [("Bez otáčení", 0), ("Po 180°", 180), ("Po 90°", 90), ("Po 45°", 45), ("Po 15°", 15)]
 PREC = [("Normální (0,5 mm)", 0.5), ("Rychlá (1 mm)", 1.0), ("Jemná (0,25 mm)", 0.25)]
@@ -41,8 +44,8 @@ def pil_to_qimage(img):
     a = np.asarray(img)
     h, w = a.shape
     rgba = np.zeros((h, w, 4), np.uint8)
-    on = a < 128
-    rgba[on] = (60, 32, 14, 255)
+    rgba[..., 0], rgba[..., 1], rgba[..., 2] = 60, 32, 14
+    rgba[..., 3] = 255 - a                     # stupně šedi = průhlednost
     q = QImage(rgba.data, w, h, w * 4, QImage.Format_RGBA8888)
     return q.copy()
 
@@ -277,6 +280,10 @@ class BoardView(QGraphicsView):
         if sel:
             m.addSeparator()
             m.addAction(T("Obnovit smazaný gravír objektu"), lambda: self.win.reset_engrave(sel[0].part_idx))
+            if sel[0].part.is_photo:
+                m.addAction(T("Nastavení obrázku gravíru…"), lambda: self.win.photo_dialog(sel[0].part_idx))
+            if "text" in sel[0].part.meta:
+                m.addAction(T("Upravit text…"), lambda: self.win.edit_text(sel[0].part_idx))
         m.exec(e.globalPos())
 
 
@@ -678,6 +685,271 @@ class TestGridDialog(QDialog):
         self.sel_lbl.setText(T("Profil „{name}“ uložen.", name=name.strip()))
 
 
+class TextDialog(QDialog):
+    """Nový nebo upravovaný textový objekt s živým náhledem."""
+
+    def __init__(self, win, spec=None, count=1, edit=False):
+        super().__init__(win)
+        from PySide6.QtWidgets import QFontComboBox, QPlainTextEdit
+        TX.load_bundled_fonts()
+        self.setWindowTitle(T("Upravit text") if edit else T("Přidat text"))
+        sp = spec or TX.TextSpec()
+        top = QHBoxLayout(self)
+        f = QFormLayout(); top.addLayout(f)
+        right = QVBoxLayout(); top.addLayout(right, 1)
+        self.text = QPlainTextEdit(sp.text); self.text.setFixedHeight(70)
+        f.addRow(T("Text:"), self.text)
+        self.font = QFontComboBox()
+        from PySide6.QtGui import QFont
+        self.font.setCurrentFont(QFont(sp.family))
+        f.addRow(T("Písmo:"), self.font)
+        row = QHBoxLayout()
+        self.bold = QCheckBox(T("Tučné")); self.bold.setChecked(sp.bold)
+        self.italic = QCheckBox(T("Kurzíva")); self.italic.setChecked(sp.italic)
+        self.align = QComboBox()
+        for t, v in (("Vlevo", "left"), ("Na střed", "center"), ("Vpravo", "right")):
+            self.align.addItem(T(t), v)
+        self.align.setCurrentIndex(["left", "center", "right"].index(sp.align))
+        row.addWidget(self.bold); row.addWidget(self.italic); row.addWidget(self.align)
+        f.addRow("", row)
+        tip = QLabel(T("Přibalená písma: Lobster, Pacifico, Great Vibes, Oswald (s českou diakritikou)."))
+        tip.setStyleSheet("color: gray"); tip.setWordWrap(True)
+        f.addRow(tip)
+        self.spacing = QDoubleSpinBox(); self.spacing.setRange(0.5, 3); self.spacing.setSingleStep(0.05)
+        self.spacing.setDecimals(2); self.spacing.setValue(sp.line_spacing)
+        f.addRow(T("Řádkování:"), self.spacing)
+        self.hmm = QDoubleSpinBox(); self.hmm.setRange(2, 1000); self.hmm.setDecimals(1); self.hmm.setSuffix(" mm")
+        self.wmm = QDoubleSpinBox(); self.wmm.setRange(2, 5000); self.wmm.setDecimals(1); self.wmm.setSuffix(" mm")
+        self.hmm.setValue(sp.height)
+        row = QHBoxLayout(); row.addWidget(QLabel(T("šířka"))); row.addWidget(self.wmm)
+        row.addWidget(QLabel(T("výška"))); row.addWidget(self.hmm)
+        f.addRow(T("Velikost textu:"), row)
+        self.tmode = QComboBox()
+        self.tmode.addItem(T("Gravírovat"), "engrave"); self.tmode.addItem(T("Vyříznout (obrysy písmen)"), "cut")
+        self.tmode.setCurrentIndex(0 if sp.text_mode == "engrave" else 1)
+        f.addRow(T("Písmena:"), self.tmode)
+        self.border = QComboBox()
+        for t, v in (("Bez řezu kolem", "none"), ("Obdélník", "rect"), ("Ovál", "oval"), ("Obrys textu", "outline")):
+            self.border.addItem(T(t), v)
+        self.border.setCurrentIndex(["none", "rect", "oval", "outline"].index(sp.border))
+        f.addRow(T("Řez kolem:"), self.border)
+        self.pad = QDoubleSpinBox(); self.pad.setRange(0, 50); self.pad.setDecimals(1); self.pad.setSuffix(" mm")
+        self.pad.setValue(sp.pad)
+        self.radius = QDoubleSpinBox(); self.radius.setRange(0, 50); self.radius.setDecimals(1); self.radius.setSuffix(" mm")
+        self.radius.setValue(sp.radius)
+        row = QHBoxLayout(); row.addWidget(self.pad); row.addWidget(QLabel(T("zaoblení"))); row.addWidget(self.radius)
+        f.addRow(T("Okraj:"), row)
+        self.hole = QCheckBox(T("Otvor na zavěšení")); self.hole.setChecked(sp.hole)
+        self.hole_d = QDoubleSpinBox(); self.hole_d.setRange(1, 20); self.hole_d.setDecimals(1); self.hole_d.setSuffix(" mm")
+        self.hole_d.setValue(sp.hole_d)
+        self.frame = QCheckBox(T("Gravírovaný rámeček")); self.frame.setChecked(sp.frame)
+        row = QHBoxLayout(); row.addWidget(self.hole); row.addWidget(self.hole_d); row.addWidget(self.frame)
+        f.addRow("", row)
+        self.count = QSpinBox(); self.count.setRange(0, 999); self.count.setValue(count)
+        f.addRow(T("Počet kusů:"), self.count)
+        self.info = QLabel(""); self.info.setStyleSheet("color: gray")
+        f.addRow(self.info)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept); bb.rejected.connect(self.reject)
+        f.addRow(bb)
+        self.preview = QLabel(); self.preview.setMinimumSize(460, 320); self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setStyleSheet("background: #3c3f44")
+        right.addWidget(self.preview, 1)
+        self.part = None
+        self._aspect = 1.0
+        self._busy = False
+        self._timer = QTimer(self); self._timer.setSingleShot(True); self._timer.timeout.connect(self.rebuild)
+        for w in (self.font,):
+            w.currentFontChanged.connect(lambda *_: self._timer.start(150))
+        self.text.textChanged.connect(lambda: self._timer.start(250))
+        for w in (self.bold, self.italic, self.hole, self.frame):
+            w.toggled.connect(lambda *_: self._timer.start(100))
+        for w in (self.align, self.tmode, self.border):
+            w.currentIndexChanged.connect(lambda *_: self._timer.start(100))
+        for w in (self.spacing, self.pad, self.radius, self.hole_d, self.hmm):
+            w.valueChanged.connect(lambda *_: self._timer.start(200))
+        self.wmm.valueChanged.connect(self._width_changed)
+        self.hmm.valueChanged.connect(self._height_changed)
+        self.resize(1050, 560)
+        self.rebuild()
+
+    def spec(self):
+        return TX.TextSpec(text=self.text.toPlainText() or " ", family=self.font.currentFont().family(),
+                           bold=self.bold.isChecked(), italic=self.italic.isChecked(),
+                           align=self.align.currentData(), line_spacing=self.spacing.value(),
+                           height=self.hmm.value(), text_mode=self.tmode.currentData(),
+                           border=self.border.currentData(), pad=self.pad.value(), radius=self.radius.value(),
+                           hole=self.hole.isChecked(), hole_d=self.hole_d.value(), frame=self.frame.isChecked())
+
+    def _width_changed(self, v):
+        if not self._busy and self._aspect > 0:
+            self._busy = True
+            self.hmm.setValue(v / self._aspect)
+            self._busy = False
+            self._timer.start(200)
+
+    def _height_changed(self, v):
+        if not self._busy:
+            self._busy = True
+            self.wmm.setValue(v * self._aspect)
+            self._busy = False
+
+    def rebuild(self):
+        sp = self.spec()
+        self.radius.setEnabled(sp.border == "rect")
+        self.pad.setEnabled(sp.border != "none")
+        self.frame.setEnabled(sp.border in ("rect", "oval"))
+        self.hole.setEnabled(sp.border != "none")
+        try:
+            tg = TX.text_geometry(sp)
+            if tg.is_empty:
+                raise ValueError(T("Text je prázdný."))
+            x0, y0, x1, y1 = tg.bounds
+            self._aspect = (x1 - x0) / max(1e-6, y1 - y0)
+            self._busy = True
+            self.wmm.setValue((x1 - x0)); self._busy = False
+            self.part = TX.build_part(sp)
+        except Exception as ex:
+            self.part = None
+            self.info.setText(str(ex))
+            self.preview.clear()
+            return
+        ow, oh = self.part.outline.bounds[2], self.part.outline.bounds[3]
+        self.info.setText(T("Rozměr dílu: {w} × {h} mm", w=f"{ow:.1f}", h=f"{oh:.1f}"))
+        self._draw()
+
+    def _draw(self):
+        p = self.part
+        W, H = max(200, self.preview.width() - 10), max(150, self.preview.height() - 10)
+        ow, oh = p.outline.bounds[2], p.outline.bounds[3]
+        k = min(W / ow, H / oh)
+        pm = QPixmap(int(ow * k) + 6, int(oh * k) + 6); pm.fill(QColor(60, 63, 68))
+        qp = QPainter(pm); qp.setRenderHint(QPainter.Antialiasing)
+        qp.translate(3, 3); qp.scale(k, k)
+
+        def path_of(coords):
+            pa = QPainterPath(); pa.moveTo(*coords[0])
+            for x, y in coords[1:]:
+                pa.lineTo(x, y)
+            pa.closeSubpath()
+            return pa
+        qp.setPen(Qt.NoPen); qp.setBrush(QColor(235, 205, 160)); qp.drawPath(path_of(list(p.outline.exterior.coords)))
+        if p.engrave_img is not None:
+            img = pil_to_qimage(p.engrave_img)
+            qp.drawImage(QRectF(0, 0, p.engrave_img.width / p.img_res, p.engrave_img.height / p.img_res), img)
+        pen = QPen(QColor(220, 0, 0)); pen.setCosmetic(True); pen.setWidthF(1.3)
+        qp.setPen(pen); qp.setBrush(Qt.NoBrush)
+        for cp in p.cut:
+            qp.drawPath(path_of(cp.pts))
+        qp.end()
+        self.preview.setPixmap(pm)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if self.part is not None:
+            self._draw()
+
+
+class PhotoDialog(QDialog):
+    """Nastavení obrázkového gravíru: režim (práh / dithering / stupně šedi), jas, kontrast, gamma…"""
+
+    def __init__(self, win, part, lines_per_mm=10.0):
+        super().__init__(win)
+        self.part = part
+        self.lpm = float(lines_per_mm)
+        ph = PH.settings(part.photo)
+        self.setWindowTitle(T("Obrázek gravíru – {name}", name=part.name))
+        top = QHBoxLayout(self)
+        f = QFormLayout(); top.addLayout(f)
+        right = QHBoxLayout(); top.addLayout(right, 1)
+        self.mode = QComboBox()
+        for t, v in (("Černobílý (práh)", "threshold"), ("Dithering – Floyd–Steinberg", "fs"),
+                     ("Dithering – Jarvis (jemnější)", "jarvis"), ("Stupně šedi (výkon podle jasu)", "gray")):
+            self.mode.addItem(T(t), v)
+        self.mode.setCurrentIndex(PH.MODES.index(ph["mode"]))
+        f.addRow(T("Režim:"), self.mode)
+
+        def isp(lo, hi, v, suf=""):
+            w = QSpinBox(); w.setRange(lo, hi); w.setValue(int(v)); w.setSuffix(suf)
+            w.valueChanged.connect(lambda *_: self._timer.start(150)); return w
+        self._timer = QTimer(self); self._timer.setSingleShot(True); self._timer.timeout.connect(self.refresh)
+        self.bri = isp(-100, 100, ph["brightness"])
+        self.con = isp(-100, 100, ph["contrast"])
+        self.gam = QDoubleSpinBox(); self.gam.setRange(0.2, 3.0); self.gam.setSingleStep(0.1); self.gam.setValue(ph["gamma"])
+        self.gam.valueChanged.connect(lambda *_: self._timer.start(150))
+        self.thr = isp(1, 254, ph["threshold"])
+        self.inv = QCheckBox(T("Negativ")); self.inv.setChecked(bool(ph["invert"]))
+        self.inv.toggled.connect(lambda *_: self._timer.start(50))
+        self.pmin = QDoubleSpinBox(); self.pmin.setRange(0, 100); self.pmin.setDecimals(0); self.pmin.setSuffix(" %")
+        self.pmin.setValue(ph["pmin"]); self.pmin.valueChanged.connect(lambda *_: self._timer.start(150))
+        f.addRow(T("Jas:"), self.bri)
+        f.addRow(T("Kontrast:"), self.con)
+        f.addRow(T("Gamma:"), self.gam)
+        f.addRow(T("Práh:"), self.thr)
+        f.addRow(T("Min. výkon (stupně šedi):"), self.pmin)
+        f.addRow(self.inv)
+        note = QLabel(T("Dithering a stupně šedi se při exportu počítají v hustotě řádků profilu\n"
+                        "({lpm} ř/mm). Na dřevo obvykle nejlépe vychází Jarvis.", lpm=f"{self.lpm:g}"))
+        note.setStyleSheet("color: gray")
+        f.addRow(note)
+        b = QPushButton(T("Výchozí nastavení")); b.clicked.connect(lambda *_: self.reset()); f.addRow(b)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept); bb.rejected.connect(self.reject)
+        f.addRow(bb)
+        self.prev_a = QLabel(); self.prev_b = QLabel()
+        for lb, cap in ((self.prev_a, T("Upravený obrázek")), (self.prev_b, T("Co se vypálí"))):
+            col = QVBoxLayout(); t = QLabel(cap); t.setAlignment(Qt.AlignCenter); col.addWidget(t)
+            lb.setMinimumSize(300, 300); lb.setAlignment(Qt.AlignCenter); lb.setStyleSheet("background: white")
+            col.addWidget(lb, 1); right.addLayout(col, 1)
+        self.mode.currentIndexChanged.connect(lambda *_: self.refresh())
+        self.resize(1050, 520)
+        self.refresh()
+
+    def settings(self):
+        return {"mode": self.mode.currentData(), "brightness": self.bri.value(), "contrast": self.con.value(),
+                "gamma": self.gam.value(), "invert": self.inv.isChecked(), "threshold": self.thr.value(),
+                "pmin": self.pmin.value()}
+
+    def reset(self):
+        d = PH.DEFAULT
+        self.bri.setValue(d["brightness"]); self.con.setValue(d["contrast"]); self.gam.setValue(d["gamma"])
+        self.thr.setValue(d["threshold"]); self.inv.setChecked(d["invert"]); self.pmin.setValue(d["pmin"])
+
+    def refresh(self):
+        ph = self.settings()
+        self.thr.setEnabled(ph["mode"] == "threshold")
+        self.pmin.setEnabled(ph["mode"] == "gray")
+        adj = PH.adjust(self.part.src_gray, ph)
+        # náhled výsledku v hustotě řádků (jako při exportu), nejvýš 450 px
+        w_mm = adj.width / self.part.img_res
+        h_mm = adj.height / self.part.img_res
+        k = min(self.lpm, 450 / max(w_mm, h_mm))
+        small = adj.resize((max(1, int(w_mm * k)), max(1, int(h_mm * k))), Image.BILINEAR)
+        burn = PH.quantize(small, ph)
+        lv = PH.levels(burn, ph)
+        shown = Image.fromarray(255 - lv, "L")
+        self._imgs = []
+        for lb, im in ((self.prev_a, adj), (self.prev_b, shown)):
+            arr = np.ascontiguousarray(np.asarray(im.convert("L")))
+            qi = QImage(arr.data, im.width, im.height, im.width, QImage.Format_Grayscale8).copy()
+            self._imgs.append((lb, QPixmap.fromImage(qi)))
+        self._fast = ph["mode"] in ("fs", "jarvis")
+        self._show()
+
+    def _show(self):
+        for lb, pm in getattr(self, "_imgs", []):
+            lb.setPixmap(pm.scaled(max(10, lb.width() - 4), max(10, lb.height() - 4), Qt.KeepAspectRatio,
+                                   Qt.FastTransformation if self._fast else Qt.SmoothTransformation))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._show()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._show()
+
+
 class ProfileDialog(QDialog):
     def __init__(self, parent, prof):
         super().__init__(parent)
@@ -915,6 +1187,8 @@ class MainWindow(QMainWindow):
         ov.addWidget(self.table)
         row = QHBoxLayout()
         b = QPushButton(T("Přidat…")); b.clicked.connect(lambda *_: self.add_part_dialog()); row.addWidget(b)
+        b = QPushButton(T("Text…")); b.setToolTip(T("Přidat text (jmenovka, nápis…)"))
+        b.clicked.connect(lambda *_: self.add_text_dialog()); row.addWidget(b)
         b = QPushButton(T("Odebrat")); b.clicked.connect(lambda *_: self.remove_part()); row.addWidget(b)
         b = QPushButton(T("+1 na desku")); b.setToolTip(T("Přidá jeden kus vybraného objektu na volné místo"))
         b.clicked.connect(lambda *_: self.add_one()); row.addWidget(b)
@@ -1252,11 +1526,59 @@ class MainWindow(QMainWindow):
         self.recheck()
         return p
 
+    # ------------------------------------------------------------- text
+    def add_text_dialog(self):
+        d = TextDialog(self)
+        if d.exec() != QDialog.Accepted or d.part is None:
+            return
+        self.add_part_obj(d.part, d.count.value())
+
+    def add_part_obj(self, p, count=1, fill=False):
+        p.count, p.fill = count, fill
+        self._clear_history()
+        self.parts.append(p)
+        self._add_row(p)
+        self.recheck()
+        return p
+
+    def photo_dialog(self, r):
+        p = self.parts[r]
+        lpm = float(self.profiles[self.prof.currentIndex()].get("lines_per_mm", 10))
+        d = PhotoDialog(self, p, lpm)
+        if d.exec() != QDialog.Accepted:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            p.set_photo(d.settings())
+        finally:
+            QApplication.restoreOverrideCursor()
+        for it in self.items:
+            if it.part is p:
+                it.refresh_image()
+        self.recheck()
+
+    def edit_text(self, r):
+        old = self.parts[r]
+        d = TextDialog(self, TX.TextSpec.from_dict(old.meta["text"]), old.count, edit=True)
+        if d.exec() != QDialog.Accepted or d.part is None:
+            return
+        new = d.part
+        new.count, new.fill, new.scale = d.count.value(), old.fill, old.scale
+        pls = self.placements()
+        self.parts[r] = new
+        self._clear_history()
+        self.table.item(r, 0).setText(new.name)
+        self.table.cellWidget(r, 1).setValue(new.count)
+        self._update_row(r)
+        self.set_placements(pls)
+
     def _add_row(self, p):
         r = self.table.rowCount()
         self.table.insertRow(r)
         it = QTableWidgetItem(p.name)
-        tip = T("Řez: {c}\nGravír: {e}", c=p.cut_file or T("— (jen gravír)"), e=p.engrave_file or T("— (jen řez)"))
+        if "text" in p.meta or p.is_photo:
+            it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+        tip = T("Dvojklik = upravit text") if "text" in p.meta else (T("Dvojklik = nastavení obrázku (dithering, stupně šedi…)") + "\n" if p.is_photo else "") + T("Řez: {c}\nGravír: {e}", c=p.cut_file or T("— (jen gravír)"), e=p.engrave_file or T("— (jen řez)"))
         it.setToolTip(tip)
         self.table.setItem(r, 0, it)
         sp = QSpinBox(); sp.setRange(0, 999); sp.setValue(p.count)
@@ -1287,6 +1609,12 @@ class MainWindow(QMainWindow):
             ss.blockSignals(True); ss.setValue(round(p.scale * 100)); ss.blockSignals(False)
 
     def _cell_dbl(self, r, c):
+        if c == 0 and r < len(self.parts) and "text" in self.parts[r].meta:
+            self.edit_text(r)
+            return
+        if c == 0 and r < len(self.parts) and self.parts[r].is_photo:
+            self.photo_dialog(r)
+            return
         if c in (3, 4) and r < len(self.parts):
             p = self.parts[r]
             d = TransformDialog(self, p, p.scale, title=T("Měřítko objektu – {name}", name=p.name))
@@ -1621,7 +1949,8 @@ class MainWindow(QMainWindow):
         data = {"version": 2, "board": st.__dict__,
                 "parts": [{"name": p.name, "cut": p.cut_file, "engrave": p.engrave_file,
                            "count": p.count, "fill": p.fill, "width_mm": p.meta.get("width_mm", 0.0),
-                           "scale": p.scale, "erase": p.erase} for p in self.parts],
+                           "scale": p.scale, "erase": p.erase, "text": p.meta.get("text"),
+                           "photo": p.photo} for p in self.parts],
                 "placements": [pl.__dict__ for pl in self.placements()]}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -1645,6 +1974,17 @@ class MainWindow(QMainWindow):
             self.direction.setCurrentIndex(0 if b["direction"] == "rows" else 1)
         base = os.path.dirname(path)
         for p in data.get("parts", []):
+            if p.get("text"):
+                try:
+                    q = self.add_part_obj(TX.build_part(TX.TextSpec.from_dict(p["text"]), p.get("name")),
+                                          p.get("count", 1), p.get("fill", False))
+                except Exception as ex:
+                    QMessageBox.warning(self, T("Chyba načtení"), str(ex)); continue
+                q.scale = float(p.get("scale", 1.0) or 1.0)
+                if p.get("erase"):
+                    q.set_erase([tuple(e) for e in p["erase"]])
+                self._update_row(len(self.parts) - 1)
+                continue
             cut = p.get("cut") or ""
             if cut and not os.path.isabs(cut):
                 cut = os.path.join(base, cut)
@@ -1654,6 +1994,8 @@ class MainWindow(QMainWindow):
             q = self.add_part(cut, eng, p.get("name"), p.get("count", 1), p.get("fill", False), p.get("width_mm", 0.0))
             if q is not None:
                 q.scale = float(p.get("scale", 1.0) or 1.0)
+                if p.get("photo") and q.is_photo:
+                    q.set_photo(p["photo"])
                 if p.get("erase"):
                     q.set_erase([tuple(e) for e in p["erase"]])
                 self._update_row(len(self.parts) - 1)

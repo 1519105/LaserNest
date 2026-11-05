@@ -16,7 +16,8 @@ excl = ["tkinter", "matplotlib", "pandas", "scipy", "IPython", "pytest",
         "PySide6.QtWebEngineCore", "PySide6.QtMultimedia", "PySide6.Qt3DCore", "PySide6.QtOpenGL"]
 args = ["main.py", "--noconfirm", "--clean", "--onefile", "--windowed", "--name", "LaserNest",
         "--icon", os.path.join("assets", "icon.ico"),
-        "--add-data", f"{os.path.join('assets', 'icon.png')}{sep}assets"]
+        "--add-data", f"{os.path.join('assets', 'icon.png')}{sep}assets",
+        "--add-data", f"{os.path.join('assets', 'fonts')}{sep}{os.path.join('assets', 'fonts')}"]
 for m in excl:
     args += ["--exclude-module", m]
 PyInstaller.__main__.run(args)

@@ -48,6 +48,8 @@ export do G-code, SVG a PNG pro LaserGRBL a LightBurn – jeden program, bez ins
 | **Řez** | Můstky (počet a šířka) proti vypadnutí dílů, kompenzace šířky řezu (kerf) z profilu; nejdřív otvory, pak obrys |
 | **Optimalizace** | Řazení dílů podle nejkratší cesty; gravír po souvislých ostrůvcích bez přejezdů přes desku; odhad času |
 | **Profily** | Rychlost, výkon, hustota řádků, průchody, kerf, max. S (`$30`), air assist – ukládají se a pamatují |
+| **Text** | Textové objekty přímo v programu: libovolné písmo (4 přibalená + písma ze systému), gravírovaná nebo vyřezávaná písmena, řez kolem (obdélník, ovál, obrys textu), otvor na zavěšení, gravírovaný rámeček; jde upravit i později |
+| **Fotky** | Černobíle (práh), dithering (Floyd–Steinberg, Jarvis) nebo stupně šedi (výkon podle jasu); jas, kontrast, gamma, negativ, min. výkon |
 | **Testovací mřížka** | Čtverečky s různým výkonem × rychlostí (gravír nebo řez), popisky hodnot, volitelně vyříznutý okraj; klikneš na nejlepší čtvereček a uložíš ho jako profil |
 | **Projekty** | Uložení a otevření celé desky (`.lnest`) |
 | **Jazyk** | Angličtina (výchozí) a čeština – přepínání v menu **Nápověda → Jazyk / Language** |
@@ -102,6 +104,25 @@ Stahuj jen odtud – jiné „download“ weby často přibalují reklamy nebo m
 | Zpět / znovu | `Ctrl+Z` / `Ctrl+Y` |
 | Duplikovat / smazat | `Ctrl+D` / `Del` |
 | Zoom / celá deska | kolečko myši / `F` |
+
+### Text (jmenovky, nápisy)
+
+**Text…** vedle *Přidat…* otevře dialog s živým náhledem: text (i víc řádků), písmo, tučné/kurzíva,
+zarovnání, velikost v mm (šířka nebo výška), písmena *gravírovat* nebo *vyříznout*, řez kolem
+(bez řezu / obdélník / ovál / obrys textu), okraj, zaoblení, otvor na zavěšení a gravírovaný rámeček.
+Text je pak normální objekt (počet, měřítko, rozmístění); dvojklik na jeho název v tabulce ho otevře k úpravě.
+Přibalená písma: Lobster, Pacifico, Great Vibes, Oswald (licence SIL Open Font License, viz `assets/fonts`).
+
+![text](docs/text_dialog_cs.png)
+
+### Fotky (dithering, stupně šedi)
+
+Dvojklik na název objektu s obrázkovým gravírem (nebo pravé tlačítko na kus → *Nastavení obrázku gravíru…*):
+režim **černobílý**, **dithering Floyd–Steinberg / Jarvis** nebo **stupně šedi** (výkon laseru podle jasu,
+od *min. výkonu* po výkon gravíru z profilu), k tomu jas, kontrast, gamma a negativ.
+Dithering a stupně šedi se při exportu počítají v hustotě řádků profilu, takže tečky sedí na řádky laseru.
+
+![fotka](docs/photo_dialog_cs.png)
 
 ### Testovací mřížka materiálu
 
@@ -231,7 +252,7 @@ python main.py
 ```
 
 Sestavení vlastního exe/binárky: `pip install pyinstaller && python build.py`.
-Testy: `python tests/test_core.py`, `python tests/test_v02.py`, `python tests/test_i18n.py`, `python tests/test_v04.py`. Kontrola G-code: `python tools/gcode_preview.py deska.gcode nahled.png`.
+Testy: `python tests/test_core.py`, `python tests/test_v02.py`, `python tests/test_i18n.py`, `python tests/test_v04.py`, `python tests/test_v05.py`. Kontrola G-code: `python tools/gcode_preview.py deska.gcode nahled.png`.
 
 ## Jak funguje nesting
 
